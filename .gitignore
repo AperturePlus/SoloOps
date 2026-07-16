@@ -1,0 +1,19 @@
+node_modules/
+bun.lockb
+.env
+.env.local
+var/
+coverage/
+*.log
+
+# SvelteKit
+apps/web/.svelte-kit/
+apps/web/build/
+apps/web/.vite/
+
+# Editors and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+

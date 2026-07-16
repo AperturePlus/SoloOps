@@ -1,0 +1,26 @@
+{
+  "name": "@soloops/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "build": "vite build",
+    "preview": "bun ./build/index.js"
+  },
+  "dependencies": {
+    "@soloops/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@sveltejs/kit": "latest",
+    "@sveltejs/vite-plugin-svelte": "latest",
+    "@tailwindcss/vite": "latest",
+    "svelte": "latest",
+    "svelte-adapter-bun": "latest",
+    "svelte-check": "latest",
+    "tailwindcss": "latest",
+    "vite": "latest"
+  }
+}
+

@@ -1,0 +1,8 @@
+node_modules
+bun.lock
+apps/web/.svelte-kit
+apps/web/build
+var
+coverage
+设计.md
+

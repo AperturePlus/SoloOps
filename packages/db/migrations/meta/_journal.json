@@ -1,0 +1,14 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1784044800000,
+      "tag": "0001_phase_zero",
+      "breakpoints": false
+    }
+  ]
+}
+
