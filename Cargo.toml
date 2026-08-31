@@ -1,0 +1,59 @@
+[workspace]
+members = [
+  "crates/soloops-hostd-protocol",
+  "crates/soloops-domain",
+  "crates/soloops-application",
+  "crates/soloops-storage",
+  "crates/soloops-server",
+  "bins/soloops-api",
+  "bins/soloops-worker",
+  "bins/soloops-hostd",
+  "bins/soloopsctl",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+argon2 = "0.5"
+axum = { version = "0.8", features = ["macros", "ws"] }
+axum-extra = { version = "0.10", features = ["cookie"] }
+base64 = "0.22"
+bollard = "0.19.4"
+clap = { version = "4.5", features = ["derive"] }
+dotenvy = "0.15"
+futures-util = "0.3"
+lettre = { version = "0.11.22", default-features = false, features = ["builder", "smtp-transport", "pool", "tokio1-rustls", "ring", "webpki-roots"] }
+rand = "0.9"
+regex = "1.11"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rpassword = "7.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml_ng = "0.10"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+tempfile = "3.20"
+thiserror = "2.0"
+time = { version = "0.3", features = ["formatting"] }
+tokio = { version = "1.47", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = "0.29"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["catch-panic", "fs", "request-id", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1.17", features = ["serde", "v4"] }
+zeroize = "1.8"
+soloops-hostd-protocol = { path = "crates/soloops-hostd-protocol" }
+
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

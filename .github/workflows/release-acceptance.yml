@@ -1,0 +1,95 @@
+name: Linux release acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-acceptance
+  cancel-in-progress: false
+
+env:
+  CADDY_VERSION: 2.11.3
+  CADDY_CHECKSUMS_SHA256: 977489c16a19c0187bade0e2d25f9d853e30dfdc63088455c727740791195dd7
+  TEST_IMAGE: busybox@sha256:9532d8c39891ca2ecde4d30d7710e01fb739c87a8b9299685c63704296b16028
+  APP_PORT: "18080"
+  CADDY_PORT: "19090"
+  CADDY_ADMIN_PORT: "20190"
+
+jobs:
+  privileged-integration:
+    name: Docker Sandbox and managed deployment
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install Rust 1.88.0
+        run: rustup toolchain install 1.88.0 --profile minimal
+      - name: Verify Docker Compose
+        run: docker compose version
+      - name: Preload immutable test image
+        run: docker pull "$TEST_IMAGE"
+      - name: Install checksum-verified Caddy
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}"
+          checksums="caddy_${CADDY_VERSION}_checksums.txt"
+          archive="caddy_${CADDY_VERSION}_linux_amd64.tar.gz"
+          curl --fail --location --silent --show-error --output "$checksums" "$base/$checksums"
+          echo "$CADDY_CHECKSUMS_SHA256  $checksums" | sha256sum --check --strict
+          curl --fail --location --silent --show-error --output "$archive" "$base/$archive"
+          grep "  $archive$" "$checksums" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" caddy
+          sudo install --mode 0755 caddy /usr/local/bin/caddy
+          caddy version
+      - name: Start disposable Caddy
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_root="$RUNNER_TEMP/soloops-release-acceptance"
+          managed_dir="$release_root/caddy-managed"
+          mkdir -p "$managed_dir"
+          printf ':19091 {\n  respond 204\n}\n' > "$managed_dir/_placeholder.caddy"
+          caddy_config="$release_root/Caddyfile"
+          printf '{\n  admin 127.0.0.1:%s\n  auto_https off\n}\nimport %s/*.caddy\n' \
+            "$CADDY_ADMIN_PORT" "$managed_dir" > "$caddy_config"
+          caddy start --config "$caddy_config" --adapter caddyfile
+          echo "SOLOOPS_RELEASE_ROOT=$release_root" >> "$GITHUB_ENV"
+          echo "SOLOOPS_CADDY_CONFIG=$caddy_config" >> "$GITHUB_ENV"
+          echo "SOLOOPS_CADDY_MANAGED_DIR=$managed_dir" >> "$GITHUB_ENV"
+      - name: Run live Sandbox acceptance
+        env:
+          SOLOOPS_TEST_SANDBOX_IMAGE: ${{ env.TEST_IMAGE }}
+          SOLOOPS_TEST_DOCKER_SOCKET: /var/run/docker.sock
+          SOLOOPS_TEST_SANDBOX_COPY_PROGRAM: /bin/cp
+        run: >-
+          cargo +1.88.0 test -p soloops-hostd
+          sandbox::tests::docker_exec_writes_workspace_and_leaves_no_container -- --ignored --exact
+      - name: Run live managed deployment acceptance
+        env:
+          SOLOOPS_TEST_MANAGED_DOCKER_CLI: /usr/bin/docker
+          SOLOOPS_TEST_MANAGED_CADDY_CLI: /usr/local/bin/caddy
+          SOLOOPS_TEST_MANAGED_CADDY_CONFIG: ${{ env.SOLOOPS_CADDY_CONFIG }}
+          SOLOOPS_TEST_MANAGED_CADDY_DIR: ${{ env.SOLOOPS_CADDY_MANAGED_DIR }}
+          SOLOOPS_TEST_MANAGED_IMAGE: ${{ env.TEST_IMAGE }}
+          SOLOOPS_TEST_MANAGED_APP_PORT: ${{ env.APP_PORT }}
+          SOLOOPS_TEST_MANAGED_CADDY_PORT: ${{ env.CADDY_PORT }}
+        run: >-
+          cargo +1.88.0 test -p soloops-hostd
+          deployment::tests::live_managed_deployment_verifies_route_and_restores_the_active_revision
+          -- --ignored --exact
+      - name: Clean disposable services
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          docker ps --all --quiet --filter label=com.docker.compose.project=soloops-release-acceptance \
+            | xargs --no-run-if-empty docker rm --force
+          docker ps --all --quiet --filter label=soloops.managed=true \
+            | xargs --no-run-if-empty docker rm --force
+          if [[ -n "${SOLOOPS_CADDY_CONFIG:-}" ]]; then
+            caddy stop --config "$SOLOOPS_CADDY_CONFIG" --adapter caddyfile
+          fi

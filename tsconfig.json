@@ -1,9 +1,0 @@
-{
-  "extends": "./tsconfig.base.json",
-  "include": [
-    "apps/api/src/**/*.ts",
-    "apps/worker/src/**/*.ts",
-    "packages/*/src/**/*.ts",
-    "scripts/**/*.ts"
-  ]
-}

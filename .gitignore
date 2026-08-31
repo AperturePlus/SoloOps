@@ -1,9 +1,14 @@
 node_modules/
+target/
 bun.lockb
 .env
 .env.local
+apps/web/.env.*.local
+apps/web/.env.mock
 var/
 coverage/
+playwright-report/
+test-results/
 *.log
 
 # SvelteKit
@@ -16,4 +21,4 @@ apps/web/.vite/
 .vscode/
 .DS_Store
 Thumbs.db
-
+.workbuddy/

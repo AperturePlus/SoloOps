@@ -10,6 +10,7 @@ export default tseslint.config(
       "apps/web/.svelte-kit/**",
       "apps/web/build/**",
       "coverage/**",
+      "target/**",
       "var/**"
     ]
   },
@@ -20,8 +21,7 @@ export default tseslint.config(
     languageOptions: {
       globals: {
         ...globals.browser,
-        ...globals.node,
-        Bun: "readonly"
+        ...globals.node
       }
     },
     rules: {

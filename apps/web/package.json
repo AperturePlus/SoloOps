@@ -7,20 +7,19 @@
     "dev": "vite dev",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "build": "vite build",
-    "preview": "bun ./build/index.js"
+    "preview": "vite preview"
   },
-  "dependencies": {
-    "@soloops/contracts": "workspace:*"
-  },
+  "dependencies": {},
   "devDependencies": {
+    "@sveltejs/adapter-static": "latest",
     "@sveltejs/kit": "latest",
     "@sveltejs/vite-plugin-svelte": "latest",
     "@tailwindcss/vite": "latest",
+    "@types/ws": "^8.18.1",
     "svelte": "latest",
-    "svelte-adapter-bun": "latest",
     "svelte-check": "latest",
     "tailwindcss": "latest",
-    "vite": "latest"
+    "vite": "latest",
+    "ws": "^8.21.1"
   }
 }
-

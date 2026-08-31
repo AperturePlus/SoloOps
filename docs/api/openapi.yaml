@@ -1,0 +1,721 @@
+openapi: 3.1.0
+info:
+  title: SoloOps Agentic Runtime API
+  version: 0.3.0
+servers:
+  - url: /
+paths:
+  /healthz:
+    get:
+      operationId: health
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /readyz:
+    get:
+      operationId: ready
+      responses:
+        "200":
+          description: Database and Schema are ready
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /metrics:
+    get:
+      operationId: metrics
+      responses:
+        "200":
+          description: Prometheus text exposition
+          content:
+            text/plain:
+              schema:
+                type: string
+  /api/auth/login:
+    post:
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          description: Login rate limited
+  /api/auth/logout:
+    post:
+      operationId: logout
+      security:
+        - ownerSession: []
+      responses:
+        "204":
+          description: Session revoked
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/auth/session:
+    get:
+      operationId: session
+      security:
+        - ownerSession: []
+      responses:
+        "200":
+          description: Current Owner
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/tasks:
+    get:
+      operationId: listTasks
+      security:
+        - ownerSession: []
+      responses:
+        "200":
+          description: Tasks ordered newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TaskSummary"
+    post:
+      operationId: createTask
+      security:
+        - ownerSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTaskRequest"
+      responses:
+        "201":
+          description: Task and initial Run created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskSummary"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+  /api/tasks/{taskId}:
+    get:
+      operationId: getTask
+      security:
+        - ownerSession: []
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+      responses:
+        "200":
+          description: Task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskSummary"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/runs/{runId}:
+    get:
+      operationId: getRun
+      security:
+        - ownerSession: []
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/runs/{runId}/runtime:
+    get:
+      operationId: getRuntime
+      security:
+        - ownerSession: []
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Persisted Agent Runtime snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeSnapshot"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/runs/{runId}/cancel:
+    post:
+      operationId: cancelRun
+      security:
+        - ownerSession: []
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Cancelled Run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunDetail"
+  /api/runs/{runId}/tool-calls/{callId}/decision:
+    post:
+      operationId: decideToolCall
+      security:
+        - ownerSession: []
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - name: callId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApprovalDecisionRequest"
+      responses:
+        "200":
+          description: Updated Tool Call
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolCallSummary"
+  /api/events:
+    get:
+      operationId: listEvents
+      description: Also accepts a WebSocket upgrade on the same URL.
+      security:
+        - ownerSession: []
+      parameters:
+        - name: after
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: runId
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Durable ordered events
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EventEnvelope"
+        "500":
+          description: Internal error; `event_stream_corrupt` is non-retryable and includes the corrupt sequence.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /api/settings/ip-notifications:
+    get:
+      operationId: getIpNotificationSettings
+      security:
+        - ownerSession: []
+      responses:
+        "200":
+          description: Current public IPv4 notification settings and delivery state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IpNotificationSettings"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    put:
+      operationId: updateIpNotificationSettings
+      security:
+        - ownerSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateIpNotificationSettingsRequest"
+      responses:
+        "200":
+          description: Saved settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IpNotificationSettings"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: SMTP is not configured
+  /api/settings/ip-notifications/test:
+    post:
+      operationId: testIpNotifications
+      security:
+        - ownerSession: []
+      responses:
+        "200":
+          description: Test email delivered to all saved recipients
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestIpNotificationResponse"
+        "502":
+          description: At least one recipient failed; response identifies failed recipients
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestIpNotificationResponse"
+components:
+  securitySchemes:
+    ownerSession:
+      type: apiKey
+      in: cookie
+      name: soloops_session
+  parameters:
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        type: string
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    Unauthorized:
+      description: Owner Session required
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    InvalidRequest:
+      description: Input validation failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    InternalError:
+      description: Internal error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+  schemas:
+    Health:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+        service:
+          type: string
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+        password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+    Owner:
+      type: object
+      required: [id, username]
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+    SessionResponse:
+      type: object
+      required: [owner]
+      properties:
+        owner:
+          $ref: "#/components/schemas/Owner"
+    IpNotificationRecipientStatus:
+      type: object
+      required: [email, lastNotifiedIpv4, lastNotifiedAt, lastAttemptAt, lastError]
+      properties:
+        email:
+          type: string
+          format: email
+        lastNotifiedIpv4:
+          type: [string, "null"]
+        lastNotifiedAt:
+          type: [integer, "null"]
+          format: int64
+        lastAttemptAt:
+          type: [integer, "null"]
+          format: int64
+        lastError:
+          type: [string, "null"]
+    IpNotificationSettings:
+      type: object
+      required: [enabled, smtpConfigured, currentIpv4, lastCheckedAt, lastChangedAt, recipients]
+      properties:
+        enabled:
+          type: boolean
+        smtpConfigured:
+          type: boolean
+        currentIpv4:
+          type: [string, "null"]
+        lastCheckedAt:
+          type: [integer, "null"]
+          format: int64
+        lastChangedAt:
+          type: [integer, "null"]
+          format: int64
+        recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/IpNotificationRecipientStatus"
+    UpdateIpNotificationSettingsRequest:
+      type: object
+      required: [enabled, recipients]
+      properties:
+        enabled:
+          type: boolean
+        recipients:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            format: email
+    TestIpNotificationResponse:
+      type: object
+      required: [sentCount, failedRecipients]
+      properties:
+        sentCount:
+          type: integer
+          minimum: 0
+        failedRecipients:
+          type: array
+          items:
+            type: string
+            format: email
+    CreateTaskRequest:
+      type: object
+      required: [title, goal]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+        goal:
+          type: string
+          minLength: 1
+          maxLength: 20000
+    RunStatus:
+      type: string
+      enum:
+        - draft
+        - queued
+        - leased
+        - planning
+        - running
+        - waiting_for_approval
+        - paused
+        - verifying
+        - reporting
+        - retry_scheduled
+        - blocked
+        - needs_recovery
+        - succeeded
+        - failed
+        - cancelled
+    TaskSummary:
+      type: object
+      required: [id, title, goal, status, latestRunId, createdAt]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        goal:
+          type: string
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        latestRunId:
+          type: string
+        createdAt:
+          type: integer
+          format: int64
+    RunDetail:
+      type: object
+      required: [id, taskId, status, statusReason, createdAt, startedAt, finishedAt]
+      properties:
+        id:
+          type: string
+        taskId:
+          type: string
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        statusReason:
+          type: [string, "null"]
+        createdAt:
+          type: integer
+          format: int64
+        startedAt:
+          type: [integer, "null"]
+          format: int64
+        finishedAt:
+          type: [integer, "null"]
+          format: int64
+    EventEnvelope:
+      type: object
+      required: [sequence, id, runId, type, payload, createdAt]
+      properties:
+        sequence:
+          type: integer
+          format: int64
+          minimum: 0
+        id:
+          type: string
+        runId:
+          type: [string, "null"]
+        type:
+          type: string
+          enum:
+            - run.created
+            - run.status_changed
+            - agent.plan_updated
+            - agent.message
+            - tool.call_started
+            - tool.call_completed
+            - tool.call_failed
+            - run.reported
+        payload:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: integer
+          format: int64
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details: {}
+    ApprovalDecisionRequest:
+      type: object
+      required: [decision]
+      additionalProperties: false
+      properties:
+        decision:
+          type: string
+          enum: [approve, deny]
+        reason:
+          type: [string, "null"]
+          maxLength: 1000
+    AgentPlan:
+      type: object
+      required: [summary, steps]
+      properties:
+        summary:
+          type: string
+        steps:
+          type: array
+          maxItems: 100
+          items:
+            type: object
+            required: [id, title, status, required]
+            properties:
+              id:
+                type: string
+              title:
+                type: string
+              status:
+                type: string
+                enum: [pending, in_progress, completed, blocked]
+              required:
+                type: boolean
+    BudgetSnapshot:
+      type: object
+      required:
+        [
+          maxModelTurns,
+          maxToolCalls,
+          maxInputTokens,
+          maxOutputTokens,
+          maxDurationMs,
+          maxToolDurationMs,
+          maxToolOutputBytes,
+          maxWorkspaceBytes
+        ]
+      properties:
+        maxModelTurns: { type: integer }
+        maxToolCalls: { type: integer }
+        maxInputTokens: { type: integer, format: int64 }
+        maxOutputTokens: { type: integer, format: int64 }
+        maxDurationMs: { type: integer, format: int64 }
+        maxToolDurationMs: { type: integer, format: int64 }
+        maxToolOutputBytes: { type: integer }
+        maxWorkspaceBytes: { type: integer, format: int64 }
+    UsageSnapshot:
+      type: object
+      required:
+        [
+          modelTurns,
+          toolCalls,
+          inputTokens,
+          outputTokens,
+          cachedInputTokens,
+          cacheWriteInputTokens,
+          elapsedMs
+        ]
+      properties:
+        modelTurns: { type: integer }
+        toolCalls: { type: integer }
+        inputTokens: { type: integer, format: int64 }
+        outputTokens: { type: integer, format: int64 }
+        cachedInputTokens: { type: integer, format: int64 }
+        cacheWriteInputTokens: { type: integer, format: int64 }
+        elapsedMs: { type: integer, format: int64 }
+    ToolCallSummary:
+      type: object
+      required:
+        [
+          callId,
+          name,
+          argumentsSha256,
+          approvalPreview,
+          risk,
+          policy,
+          status,
+          resultSummary,
+          errorCategory,
+          startedAt,
+          completedAt
+        ]
+      properties:
+        callId: { type: string }
+        name: { type: string }
+        argumentsSha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        approvalPreview:
+          type: [object, "null"]
+          additionalProperties: true
+        risk:
+          type: string
+          enum: [read_only, workspace_write, process, network, privileged]
+        policy:
+          type: string
+          enum: [allow, deny, require_approval]
+        status:
+          type: string
+          enum: [pending, waiting_for_approval, running, completed, failed, denied, unknown]
+        resultSummary: { type: [string, "null"] }
+        errorCategory: { type: [string, "null"] }
+        startedAt: { type: [integer, "null"], format: int64 }
+        completedAt: { type: [integer, "null"], format: int64 }
+    EvidenceSummary:
+      type: object
+      required:
+        [id, toolCallId, kind, summary, artifactRef, contentSha256, workspaceRevision, createdAt]
+      properties:
+        id: { type: string }
+        toolCallId: { type: string }
+        kind: { type: string }
+        summary: { type: string }
+        artifactRef: { type: [string, "null"] }
+        contentSha256: { type: [string, "null"] }
+        workspaceRevision: { type: integer, format: int64 }
+        createdAt: { type: integer, format: int64 }
+    FinalReport:
+      type: object
+      required:
+        [outcome, summary, completed, incomplete, risks, evidenceIds, rollback, usage, markdown]
+      properties:
+        outcome: { type: string }
+        summary: { type: string }
+        completed: { type: array, items: { type: string } }
+        incomplete: { type: array, items: { type: string } }
+        risks: { type: array, items: { type: string } }
+        evidenceIds: { type: array, items: { type: string } }
+        rollback: { type: [string, "null"] }
+        usage: { $ref: "#/components/schemas/UsageSnapshot" }
+        markdown: { type: string }
+    RuntimeSnapshot:
+      type: object
+      required:
+        [runId, checkpoint, plan, budget, usage, workspaceRevision, toolCalls, evidence, report]
+      properties:
+        runId: { type: string }
+        checkpoint:
+          type: string
+          enum:
+            [
+              preparing,
+              calling_model,
+              executing_tools,
+              validating_completion,
+              reporting,
+              waiting_for_approval,
+              retry_scheduled,
+              recovering
+            ]
+        plan: { $ref: "#/components/schemas/AgentPlan" }
+        budget: { $ref: "#/components/schemas/BudgetSnapshot" }
+        usage: { $ref: "#/components/schemas/UsageSnapshot" }
+        workspaceRevision: { type: integer, format: int64 }
+        toolCalls:
+          type: array
+          items: { $ref: "#/components/schemas/ToolCallSummary" }
+        evidence:
+          type: array
+          items: { $ref: "#/components/schemas/EvidenceSummary" }
+        report:
+          oneOf:
+            - $ref: "#/components/schemas/FinalReport"
+            - type: "null"

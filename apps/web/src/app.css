@@ -3,16 +3,84 @@
 @theme {
   --color-ink-950: #080b10;
   --color-ink-900: #10151d;
+  --color-ink-850: #141a24;
   --color-ink-800: #18202b;
+  --color-ink-700: #232b39;
+
   --color-mint-400: #55e6b2;
   --color-mint-500: #28c991;
+  --color-mint-600: #17a97a;
+
+  --color-edge: #1c2230;
+  --color-edge-strong: #2a3245;
+
+  --font-mono:
+    "SF Mono", ui-monospace, "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --shadow-panel: 0 1px 0 rgb(0 0 0 / 0.2), 0 8px 24px -12px rgb(0 0 0 / 0.5);
+  --shadow-pop: 0 4px 16px -4px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(255 255 255 / 0.04);
+
+  --animate-fade-up: fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-fade-in: fade-in 0.35s ease-out both;
+  --animate-pop-in: pop-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  --animate-slide-in: slide-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(10px) scale(0.99);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+      transform: scale(0.8);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  @keyframes slide-in {
+    from {
+      opacity: 0;
+      transform: translateX(-6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
 }
 
 :root {
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
   color: #e8edf5;
   background: #080b10;
   font-synthesis: none;
+  font-size: 14px;
 }
 
 body {
@@ -20,8 +88,10 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background:
-    radial-gradient(circle at top left, rgb(40 201 145 / 10%), transparent 35rem),
-    #080b10;
+    radial-gradient(circle at top left, rgb(40 201 145 / 7%), transparent 32rem),
+    radial-gradient(circle at 85% -10%, rgb(59 130 246 / 4%), transparent 30rem), #080b10;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 button,
@@ -30,3 +100,271 @@ textarea {
   font: inherit;
 }
 
+/* Dotted blueprint grid backdrop for the workspace area. */
+.ops-grid-bg {
+  background-image: radial-gradient(rgb(255 255 255 / 0.055) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+/* ---------------------------------------------------------------------------
+   Composite-layout utilities: split panes, metric chips, status flows.
+   --------------------------------------------------------------------------- */
+
+/* Crisp vertical divider used inside split panes. */
+.split-divider {
+  border-left: 1px solid rgb(255 255 255 / 0.055);
+}
+
+/* Codex-style metric chip: tiny uppercase label over a mono value. */
+.metric-chip {
+  border: 1px solid rgb(255 255 255 / 0.055);
+  border-radius: 8px;
+  background: rgb(16 21 29 / 0.62);
+  padding: 0.55rem 0.75rem;
+}
+.metric-chip dt {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgb(100 116 139 / 1);
+}
+.metric-chip dd {
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: rgb(226 232 240 / 1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Stacked command strip: hairline-separated rows of label/value pairs. */
+.command-strip {
+  border: 1px solid rgb(255 255 255 / 0.055);
+  border-radius: 10px;
+  background: rgb(16 21 29 / 0.5);
+  overflow: hidden;
+}
+.command-strip > * + * {
+  border-top: 1px solid rgb(255 255 255 / 0.055);
+}
+
+/* Horizontal status flow (queued → planning → running…). */
+.flow-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: rgb(100 116 139 / 1);
+  white-space: nowrap;
+}
+.flow-step[data-state="done"] {
+  color: rgb(85 230 178 / 1);
+}
+.flow-step[data-state="current"] {
+  color: rgb(226 232 240 / 1);
+}
+
+/* Left rail nav item for settings. */
+.rail-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  color: rgb(148 163 184 / 1);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+.rail-link:hover {
+  background: rgb(255 255 255 / 0.04);
+  color: rgb(232 237 245 / 1);
+}
+.rail-link[data-active="true"] {
+  background: rgb(85 230 178 / 0.08);
+  color: rgb(232 237 245 / 1);
+}
+.rail-link[data-active="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 25%;
+  bottom: 25%;
+  width: 2px;
+  border-radius: 2px;
+  background: rgb(85 230 178 / 1);
+}
+.rail-link {
+  position: relative;
+}
+
+/* ---------------------------------------------------------------------------
+   Codex-style building blocks: hairline panels, focus rings, disclosure.
+   --------------------------------------------------------------------------- */
+
+.panel {
+  border: 1px solid var(--color-edge);
+  background: rgb(16 21 29 / 0.62);
+  border-radius: 10px;
+  box-shadow: var(--shadow-panel);
+}
+
+.panel-hover {
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease;
+}
+.panel-hover:hover {
+  border-color: var(--color-edge-strong);
+  background: rgb(20 26 36 / 0.8);
+}
+
+.hairline {
+  border-bottom: 1px solid rgb(255 255 255 / 0.055);
+}
+
+/* Terminal-ish dark well for code/payloads. */
+.well {
+  background: rgb(0 0 0 / 0.32);
+  border: 1px solid rgb(255 255 255 / 0.055);
+  border-radius: 8px;
+}
+
+/* Focus ring: mint glow, thin. */
+:focus-visible {
+  outline: 2px solid rgb(85 230 178 / 0.55);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* ---------------------------------------------------------------------------
+   Motion primitives (kept from before)
+   --------------------------------------------------------------------------- */
+
+/* Working indicator: soft breathing dots. */
+@keyframes agent-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.agent-dot {
+  animation: agent-pulse 1.3s ease-in-out infinite;
+}
+
+/* Shimmer sweep for the "Working…" label. */
+@keyframes agent-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.agent-shimmer-text {
+  background: linear-gradient(
+    100deg,
+    rgb(232 237 245 / 45%) 35%,
+    #e8edf5 50%,
+    rgb(232 237 245 / 45%) 65%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: agent-shimmer 2.2s linear infinite;
+}
+
+@keyframes agent-progress-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.agent-progress-track {
+  position: relative;
+  overflow: hidden;
+}
+.agent-progress-track::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(85 230 178 / 80%), transparent);
+  animation: agent-progress-sweep 1.6s ease-in-out infinite;
+}
+
+/* Status ring pulse for the live badge. */
+@keyframes agent-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgb(85 230 178 / 45%);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgb(85 230 178 / 0%);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgb(85 230 178 / 0%);
+  }
+}
+
+.agent-live-ring {
+  animation: agent-ring 2s ease-out infinite;
+}
+
+/* Smooth expand/collapse for disclosure panels. */
+.agent-disclose {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.agent-disclose[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+.agent-disclose > div {
+  overflow: hidden;
+}
+
+/* Refined scrollbars for stream panels. */
+.agent-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 14%) transparent;
+}
+.agent-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.agent-scroll::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background: rgb(255 255 255 / 14%);
+}
+.agent-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgb(255 255 255 / 24%);
+}
+
+/* Vertical timeline connector for plan / activity columns. */
+.track-line {
+  border-left: 1px solid rgb(255 255 255 / 0.07);
+}
+
+/* Respect users who prefer reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

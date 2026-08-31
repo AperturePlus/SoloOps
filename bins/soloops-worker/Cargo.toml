@@ -1,0 +1,16 @@
+[package]
+name = "soloops-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+soloops-application = { path = "../../crates/soloops-application" }
+soloops-server = { path = "../../crates/soloops-server" }
+soloops-storage = { path = "../../crates/soloops-storage" }
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
