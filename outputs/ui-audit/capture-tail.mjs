@@ -1,0 +1,21 @@
+import { chromium } from "@playwright/test";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const base = process.env.BASE_URL ?? "http://127.0.0.1:5174";
+
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+await page.goto(`${base}/login`, { waitUntil: "domcontentloaded" });
+await page.fill('input[type="password"]', "mock-password");
+await page.click('form button:has-text("Sign in")');
+await page.waitForURL("**/tasks", { timeout: 15000 });
+await page.waitForTimeout(1500);
+await page.screenshot({ path: join(here, "final-tasks.png"), fullPage: true });
+console.log("captured final-tasks");
+await page.goto(`${base}/settings/notifications`, { waitUntil: "domcontentloaded" });
+await page.waitForTimeout(1200);
+await page.screenshot({ path: join(here, "final-settings.png"), fullPage: true });
+console.log("captured final-settings");
+await browser.close();
