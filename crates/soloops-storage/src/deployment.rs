@@ -188,6 +188,7 @@ impl Database {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)] // one flat audit row per deployment operation
     pub async fn begin_managed_deployment_operation(
         &self,
         call_id: &str,

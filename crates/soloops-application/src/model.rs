@@ -243,9 +243,10 @@ impl ModelProvider for ChatCompletionsProvider {
                 },
             })
             .collect::<Vec<_>>();
-        let prompt_cache_key = self
-            .prompt_cache_key_enabled
-            .then(|| stable_prompt_cache_key(&self.model, system, &tools));
+        let prompt_cache_key = match self.prompt_cache_key_enabled {
+            true => Some(stable_prompt_cache_key(&self.model, system, &tools)?),
+            false => None,
+        };
         let body = ChatRequest {
             model: self.model.clone(),
             messages: vec![
@@ -255,7 +256,11 @@ impl ModelProvider for ChatCompletionsProvider {
                 },
                 ChatMessage {
                     role: "user",
-                    content: serde_json::to_string(&context).expect("prompt context is serializable"),
+                    content: serde_json::to_string(&context).map_err(|error| ProviderError {
+                        category: ProviderErrorCategory::Protocol,
+                        message: format!("prompt context is not serializable: {error}"),
+                        retry_after: None,
+                    })?,
                 },
             ],
             tools,
@@ -367,14 +372,18 @@ impl ModelProvider for ChatCompletionsProvider {
     }
 }
 
-fn stable_prompt_cache_key(model: &str, system: &str, tools: &[ChatTool]) -> String {
+fn stable_prompt_cache_key(model: &str, system: &str, tools: &[ChatTool]) -> Result<String, ProviderError> {
     let stable_prefix = serde_json::to_vec(&json!({
         "model": model,
         "system": system,
         "tools": tools,
     }))
-    .expect("prompt cache key input is serializable");
-    format!("{:x}", Sha256::digest(stable_prefix))
+    .map_err(|error| ProviderError {
+        category: ProviderErrorCategory::Protocol,
+        message: format!("prompt cache key input is not serializable: {error}"),
+        retry_after: None,
+    })?;
+    Ok(format!("{:x}", Sha256::digest(stable_prefix)))
 }
 
 fn map_transport_error(error: reqwest::Error) -> ProviderError {
@@ -431,8 +440,8 @@ mod tests {
                 parameters: json!({"type": "object"}),
             },
         }];
-        let first = stable_prompt_cache_key("test-model", "system", &tools);
-        let second = stable_prompt_cache_key("test-model", "system", &tools);
+        let first = stable_prompt_cache_key("test-model", "system", &tools).unwrap();
+        let second = stable_prompt_cache_key("test-model", "system", &tools).unwrap();
         assert_eq!(first, second);
         assert_eq!(first.len(), 64);
         assert!(!first.contains("run"));

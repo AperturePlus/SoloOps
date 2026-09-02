@@ -1007,30 +1007,28 @@ impl ManagedDeploymentService {
                 output_limit,
             )
             .await?;
-        if let Some((call_id, lease_token)) = operation {
-            if !self
+        if let Some((call_id, lease_token)) = operation
+            && !self
                 .database
                 .update_managed_deployment_phase(call_id, lease_token, "applying_compose", "applying_caddy")
                 .await
                 .map_err(|_| ManagedDeployError::internal("could not checkpoint Caddy apply"))?
-            {
-                return Err(ManagedDeployError::denied(
-                    "deployment operation phase changed before Caddy apply",
-                ));
-            }
+        {
+            return Err(ManagedDeployError::denied(
+                "deployment operation phase changed before Caddy apply",
+            ));
         }
         self.apply_caddy_fragment(revision, output_limit).await?;
-        if let Some((call_id, lease_token)) = operation {
-            if !self
+        if let Some((call_id, lease_token)) = operation
+            && !self
                 .database
                 .update_managed_deployment_phase(call_id, lease_token, "applying_caddy", "verifying_health")
                 .await
                 .map_err(|_| ManagedDeployError::internal("could not checkpoint health verification"))?
-            {
-                return Err(ManagedDeployError::denied(
-                    "deployment operation phase changed before health verification",
-                ));
-            }
+        {
+            return Err(ManagedDeployError::denied(
+                "deployment operation phase changed before health verification",
+            ));
         }
         let site = revision.preview["site"]
             .as_str()
