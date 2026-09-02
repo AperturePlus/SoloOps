@@ -49,3 +49,13 @@ test("listEvents filters by after cursor and runId", () => {
   expect(listEvents(state, 0, "r1").map((e) => e.id)).toEqual(["a", "c"]);
   expect(listEvents(state, 1, "r1").map((e) => e.id)).toEqual(["c"]);
 });
+
+test("ssh access fixture is internally consistent", () => {
+  const state = createState();
+  const entries = state.sshAccess.files.flatMap((file) => file.entries);
+  expect(entries.filter((entry) => entry.valid).length).toBe(state.sshAccess.totalKeys);
+  expect(entries.filter((entry) => !entry.valid).length).toBe(state.sshAccess.invalidLines);
+  expect(state.sshAccess.machines.reduce((sum, machine) => sum + machine.keyCount, 0)).toBe(
+    state.sshAccess.totalKeys
+  );
+});

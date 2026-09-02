@@ -142,6 +142,15 @@ export function createMockRouter(deps: MockRouterDeps) {
       }
     }
 
+    // /api/settings/ssh-access
+    if (segments[1] === "settings" && segments[2] === "ssh-access") {
+      if (method === "GET" && segments.length === 3) {
+        deps.state.sshAccess = { ...deps.state.sshAccess, scannedAt: Date.now() };
+        sendJson(res, 200, deps.state.sshAccess);
+        return true;
+      }
+    }
+
     // /api/tasks
     if (segments[1] === "tasks") {
       if (method === "GET" && segments.length === 2) {

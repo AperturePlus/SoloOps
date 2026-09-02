@@ -10,7 +10,11 @@
   const isNew = $derived(path === "/tasks/new");
   const isSettings = $derived(path.startsWith("/settings"));
 
-  const ACTIVE_STYLE = "background:rgb(255 255 255 / 0.07);color:#e8edf5";
+  // Shared nav item classes (ui-spec.md §2): 16px icons, one active treatment.
+  const NAV_ITEM =
+    "grid size-9 place-items-center rounded-lg text-muted-foreground transition-colors duration-200 hover:bg-ink-800/70 hover:text-foreground";
+  const navClass = (active: boolean) =>
+    `${NAV_ITEM}${active ? " bg-ink-800/70 text-foreground" : ""}`;
 </script>
 
 <svelte:head>
@@ -25,7 +29,7 @@
   >
     <a
       href="/tasks"
-      class="grid size-8 place-items-center rounded-lg text-mint-400 transition-colors duration-200 hover:bg-white/5"
+      class="grid size-8 place-items-center rounded-lg text-mint-400 transition-colors duration-200 hover:bg-ink-800/70"
       aria-label="SoloOps home"
       title="SoloOps"
     >
@@ -45,49 +49,30 @@
     </a>
 
     <nav class="mt-6 flex flex-1 flex-col items-center gap-1.5" aria-label="Primary">
-      <a
-        href="/"
-        class="grid size-9 place-items-center rounded-lg text-slate-400 transition-colors duration-200 hover:bg-white/5 hover:text-slate-100"
-        aria-label="Overview"
-        title="Overview"
-        style={isHome ? ACTIVE_STYLE : ""}
-      >
-        <Icon name="layout" size={18} />
+      <a href="/" class={navClass(isHome)} aria-label="Overview" title="Overview">
+        <Icon name="layout" size={16} />
       </a>
-      <a
-        href="/tasks"
-        class="grid size-9 place-items-center rounded-lg text-slate-400 transition-colors duration-200 hover:bg-white/5 hover:text-slate-100"
-        aria-label="Tasks"
-        title="Tasks"
-        style={isTasks ? ACTIVE_STYLE : ""}
-      >
-        <Icon name="list" size={18} />
+      <a href="/tasks" class={navClass(isTasks)} aria-label="Tasks" title="Tasks">
+        <Icon name="list" size={16} />
       </a>
-      <a
-        href="/tasks/new"
-        class="grid size-9 place-items-center rounded-lg text-slate-400 transition-colors duration-200 hover:bg-white/5 hover:text-slate-100"
-        aria-label="New task"
-        title="New task"
-        style={isNew ? ACTIVE_STYLE : ""}
-      >
-        <Icon name="plus" size={18} />
+      <a href="/tasks/new" class={navClass(isNew)} aria-label="New task" title="New task">
+        <Icon name="plus" size={16} />
       </a>
     </nav>
 
     <nav class="flex flex-col items-center gap-1.5" aria-label="System">
       <a
         href="/settings/notifications"
-        class="grid size-9 place-items-center rounded-lg text-slate-400 transition-colors duration-200 hover:bg-white/5 hover:text-slate-100"
+        class={navClass(isSettings)}
         aria-label="Settings"
         title="Settings"
-        style={isSettings ? ACTIVE_STYLE : ""}
       >
-        <Icon name="gear" size={18} />
+        <Icon name="gear" size={16} />
       </a>
     </nav>
 
     <span
-      class="mt-3 rounded-full border border-mint-400/20 bg-mint-400/5 px-1.5 py-0.5 text-[9px] font-semibold tracking-wider text-mint-400"
+      class="mt-3 rounded-full border border-mint-400/20 bg-mint-400/5 px-1.5 py-0.5 text-2xs font-semibold tracking-wider text-mint-400"
       title="SoloOps Phase 3.1"
     >
       3.1

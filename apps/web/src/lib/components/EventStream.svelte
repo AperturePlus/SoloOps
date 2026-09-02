@@ -39,7 +39,7 @@
   function eventTone(type: EventEnvelope["type"]): string {
     switch (type) {
       case "run.created":
-        return "text-slate-500";
+        return "text-muted-foreground/65";
       case "run.status_changed":
         return "text-sky-300";
       case "agent.plan_updated":
@@ -55,7 +55,7 @@
       case "run.reported":
         return "text-mint-400";
       default:
-        return "text-slate-500";
+        return "text-muted-foreground/65";
     }
   }
 
@@ -111,18 +111,13 @@
 </script>
 
 <section aria-label="Activity">
-  <div class="flex items-center justify-between">
-    <h2 class="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">Activity</h2>
-    <span class="font-mono text-[11px] text-slate-500">{events.length}</span>
-  </div>
-
   {#if hiddenCount > 0}
     <button
       type="button"
-      class="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-white/10 py-1.5 text-[11px] text-slate-500 transition-colors hover:border-white/20 hover:text-slate-300"
+      class="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-edge py-1.5 text-2xs text-muted-foreground/65 transition-colors hover:border-edge-strong hover:text-muted-foreground"
       onclick={revealMore}
     >
-      <Icon name="chevron-right" size={11} />
+      <Icon name="chevron-right" size={12} />
       Show {hiddenCount} earlier events
     </button>
   {/if}
@@ -131,7 +126,7 @@
     {#each visible as event, index (event.sequence)}
       {@const { title, detail } = summarize(event)}
       <li
-        class="animate-fade-up group rounded-md px-2 py-1.5 transition-colors duration-200 hover:bg-white/[0.03]"
+        class="animate-fade-up group rounded-md px-2 py-1.5 transition-colors duration-200 hover:bg-ink-800/60"
         style={`animation-delay:${Math.min(index * 30, 240)}ms`}
       >
         <div class="flex items-start gap-2.5">
@@ -144,23 +139,27 @@
 
           <div class="min-w-0 flex-1">
             <div class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-              <span class="text-[13px] text-slate-200">{title}</span>
+              <span class="text-sm text-foreground">{title}</span>
               <time
-                class="text-[11px] tabular-nums text-slate-600"
+                class="text-2xs tabular-nums text-muted-foreground/65"
                 datetime={new Date(event.createdAt).toISOString()}
                 title={new Date(event.createdAt).toLocaleString()}
               >
                 {relativeTime(event.createdAt, now)}
               </time>
-              <span class="ml-auto font-mono text-[9px] text-slate-700">#{event.sequence}</span>
+              <span class="ml-auto font-mono text-2xs text-muted-foreground/65"
+                >#{event.sequence}</span
+              >
             </div>
             {#if detail}
-              <p class="mt-0.5 text-xs leading-relaxed break-words text-slate-400">{detail}</p>
+              <p class="mt-0.5 text-xs leading-relaxed break-words text-muted-foreground">
+                {detail}
+              </p>
             {/if}
 
             <button
               type="button"
-              class="mt-0.5 text-[11px] text-slate-600 opacity-0 transition-opacity duration-200 hover:text-slate-400 group-hover:opacity-100 focus:opacity-100"
+              class="mt-0.5 text-2xs text-muted-foreground/65 opacity-0 transition-opacity duration-200 hover:text-muted-foreground group-hover:opacity-100 focus:opacity-100"
               aria-expanded={expanded.has(event.id)}
               onclick={() => toggleRaw(event.id)}
             >
@@ -169,7 +168,7 @@
             <div class="agent-disclose" data-open={expanded.has(event.id)}>
               <div>
                 <pre
-                  class="agent-scroll mt-1 max-h-56 overflow-auto rounded-lg border border-white/5 bg-black/25 p-2 text-[11px] leading-relaxed text-slate-500">{JSON.stringify(
+                  class="agent-scroll mt-1 max-h-56 overflow-auto rounded-lg border border-edge bg-black/25 p-2 text-2xs leading-relaxed text-muted-foreground/65">{JSON.stringify(
                     event.payload,
                     null,
                     2

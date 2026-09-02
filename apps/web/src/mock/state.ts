@@ -7,6 +7,7 @@ import type {
   RunStatus
 } from "$lib/contracts";
 import type { IpNotificationSettings } from "$lib/contracts";
+import type { SshAccessReport } from "$lib/contracts";
 
 export interface ScenarioHandle {
   runId: string;
@@ -23,6 +24,7 @@ export interface MockState {
   events: EventEnvelope[];
   scenarios: Map<string, ScenarioHandle>;
   ipNotifications: IpNotificationSettings;
+  sshAccess: SshAccessReport;
 }
 
 function randomId(prefix: string): string {
@@ -58,6 +60,97 @@ function emptyUsage() {
   };
 }
 
+function mockSshAccess(): SshAccessReport {
+  return {
+    scannedAt: Date.now(),
+    user: "owner",
+    homeDir: "/home/owner",
+    platform: "linux",
+    totalKeys: 4,
+    invalidLines: 1,
+    machines: [
+      { name: "buildbox", keyCount: 1 },
+      { name: "thinkpad", keyCount: 2 },
+      { name: null, keyCount: 1 }
+    ],
+    files: [
+      {
+        path: "/home/owner/.ssh/authorized_keys",
+        role: "user",
+        exists: true,
+        error: null,
+        entries: [
+          {
+            line: 1,
+            keyType: "ssh-ed25519",
+            keyBits: 256,
+            fingerprint: "SHA256:tR4mP0rtA1Xi9q2Ld8vN3wY5uI7oP1aSdF6gH8jK5cE",
+            comment: "owner@thinkpad",
+            machine: "thinkpad",
+            options: [],
+            fromPatterns: null,
+            forcedCommand: null,
+            valid: true,
+            error: null
+          },
+          {
+            line: 2,
+            keyType: "ssh-rsa",
+            keyBits: 3072,
+            fingerprint: "SHA256:Q2b9ZkW4eV7nR1mYcU3xD8fG6hJ0lK5aSdF2gH8jK5cE",
+            comment: "owner@thinkpad",
+            machine: "thinkpad",
+            options: [],
+            fromPatterns: null,
+            forcedCommand: null,
+            valid: true,
+            error: null
+          },
+          {
+            line: 4,
+            keyType: "ssh-ed25519",
+            keyBits: 256,
+            fingerprint: "SHA256:9Xk7Lm2Np8Qw4Er6Ty1Uz3Xc5Vb7Nh9Jk2Lm4Pq6St8Uv",
+            comment: "ci@buildbox",
+            machine: "buildbox",
+            options: ['from="10.0.0.*"', 'command="/usr/local/bin/nightly-backup"', "no-pty"],
+            fromPatterns: ["10.0.0.*"],
+            forcedCommand: "/usr/local/bin/nightly-backup",
+            valid: true,
+            error: null
+          },
+          {
+            line: 6,
+            keyType: "ssh-ed25519",
+            keyBits: 256,
+            fingerprint: "SHA256:VbN8Jk2Lm4Pq6St8Uv0Wx2Yz4A6B8C0D2E4F6G8H0J2K4L",
+            comment: "recovery key 2024",
+            machine: null,
+            options: [],
+            fromPatterns: null,
+            forcedCommand: null,
+            valid: true,
+            error: null
+          },
+          {
+            line: 8,
+            keyType: null,
+            keyBits: null,
+            fingerprint: null,
+            comment: null,
+            machine: null,
+            options: [],
+            fromPatterns: null,
+            forcedCommand: null,
+            valid: false,
+            error: "line does not contain a recognizable public key type"
+          }
+        ]
+      }
+    ]
+  };
+}
+
 export function createState(): MockState {
   return {
     owner: null,
@@ -73,7 +166,8 @@ export function createState(): MockState {
       lastCheckedAt: Date.now(),
       lastChangedAt: Date.now(),
       recipients: []
-    }
+    },
+    sshAccess: mockSshAccess()
   };
 }
 

@@ -44,6 +44,46 @@ export type TestIpNotificationResponse = {
   failedRecipients: string[];
 };
 
+export type SshKeyFileRole = "user" | "administrators";
+
+export type SshAuthorizedKeyEntry = {
+  line: number;
+  keyType: string | null;
+  keyBits: number | null;
+  fingerprint: string | null;
+  comment: string | null;
+  machine: string | null;
+  options: string[];
+  fromPatterns: string[] | null;
+  forcedCommand: string | null;
+  valid: boolean;
+  error: string | null;
+};
+
+export type SshAuthorizedKeysFile = {
+  path: string;
+  role: SshKeyFileRole;
+  exists: boolean;
+  entries: SshAuthorizedKeyEntry[];
+  error: string | null;
+};
+
+export type SshMachineSummary = {
+  name: string | null;
+  keyCount: number;
+};
+
+export type SshAccessReport = {
+  scannedAt: number;
+  user: string | null;
+  homeDir: string | null;
+  platform: string;
+  totalKeys: number;
+  invalidLines: number;
+  machines: SshMachineSummary[];
+  files: SshAuthorizedKeysFile[];
+};
+
 export type TaskSummary = {
   id: string;
   title: string;

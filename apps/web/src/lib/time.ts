@@ -18,5 +18,12 @@ export function relativeTime(timestamp: number, now: number = Date.now()): strin
   if (delta < 60_000) return `${Math.floor(delta / 1_000)}s ago`;
   if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`;
   if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)}h ago`;
-  return new Date(timestamp).toLocaleDateString();
+  return formatDateTime(timestamp);
+}
+
+export function formatDateTime(timestamp: number): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }

@@ -63,14 +63,34 @@ function makeReport(): FinalReport {
     usage: {
       modelTurns: 3,
       toolCalls: 1,
-      inputTokens: 1200,
-      outputTokens: 600,
-      cachedInputTokens: 0,
+      inputTokens: 1560,
+      outputTokens: 640,
+      cachedInputTokens: 400,
       cacheWriteInputTokens: 0,
-      elapsedMs: 4500
+      elapsedMs: 6000
     },
     markdown: "# Mock Report\n\nAll steps completed successfully."
   };
+}
+
+function setPlanStep(
+  deps: ScenarioDeps,
+  runId: string,
+  stepId: string,
+  status: "pending" | "in_progress" | "completed"
+): void {
+  const runtime = deps.state.runtimes.get(runId);
+  const step = runtime?.plan.steps.find((item) => item.id === stepId);
+  if (step) step.status = status;
+}
+
+function addUsage(
+  deps: ScenarioDeps,
+  runId: string,
+  patch: Partial<RuntimeSnapshot["usage"]>
+): void {
+  const runtime = deps.state.runtimes.get(runId);
+  if (runtime) runtime.usage = { ...runtime.usage, ...patch };
 }
 
 function setCheckpoint(
@@ -99,6 +119,12 @@ function advance(deps: ScenarioDeps, runId: string): void {
           { id: "s3", title: "Verify result", status: "pending", required: true }
         ]
       };
+      addUsage(deps, runId, {
+        modelTurns: 1,
+        inputTokens: 800,
+        outputTokens: 400,
+        elapsedMs: 1500
+      });
       broadcastEvent(
         deps,
         appendEvent(deps.state, {
@@ -117,6 +143,14 @@ function advance(deps: ScenarioDeps, runId: string): void {
       const call = makeToolCall();
       runtime.toolCalls = [call];
       setRunStatus(deps.state, runId, "running");
+      setPlanStep(deps, runId, "s1", "completed");
+      setPlanStep(deps, runId, "s2", "in_progress");
+      addUsage(deps, runId, {
+        modelTurns: 2,
+        inputTokens: 1200,
+        outputTokens: 500,
+        elapsedMs: 3000
+      });
       broadcastEvent(
         deps,
         appendEvent(deps.state, {
@@ -151,6 +185,7 @@ function advance(deps: ScenarioDeps, runId: string): void {
     case 3: {
       setRunStatus(deps.state, runId, "verifying");
       setCheckpoint(deps, runId, "validating_completion");
+      setPlanStep(deps, runId, "s3", "in_progress");
       broadcastEvent(
         deps,
         appendEvent(deps.state, {
@@ -168,6 +203,14 @@ function advance(deps: ScenarioDeps, runId: string): void {
       const runtime = deps.state.runtimes.get(runId)!;
       runtime.checkpoint = "reporting";
       runtime.report = makeReport();
+      setPlanStep(deps, runId, "s3", "completed");
+      addUsage(deps, runId, {
+        modelTurns: 3,
+        inputTokens: 1560,
+        outputTokens: 640,
+        cachedInputTokens: 400,
+        elapsedMs: 6000
+      });
       broadcastEvent(
         deps,
         appendEvent(deps.state, {
@@ -213,7 +256,10 @@ export function approveToolCall(deps: ScenarioDeps, runId: string, callId: strin
     completedAt: Date.now()
   });
   setRunStatus(deps.state, runId, "running");
+  setPlanStep(deps, runId, "s2", "completed");
   const runtime = deps.state.runtimes.get(runId)!;
+  runtime.workspaceRevision = 1;
+  addUsage(deps, runId, { toolCalls: 1, elapsedMs: 4500 });
   broadcastEvent(
     deps,
     appendEvent(deps.state, {
@@ -223,7 +269,6 @@ export function approveToolCall(deps: ScenarioDeps, runId: string, callId: strin
       payload: { callId, resultSummary: "Applied the change to the workspace." }
     })
   );
-  void runtime;
   handle.step = 3;
   next(deps, runId, () => advance(deps, runId));
 }

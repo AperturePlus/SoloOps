@@ -16,7 +16,7 @@
       case "blocked":
         return "border-amber-400/40 bg-amber-400/10 text-amber-300";
       default:
-        return "border-white/10 bg-white/[0.03] text-slate-500";
+        return "border-edge bg-ink-800/60 text-muted-foreground/65";
     }
   }
 
@@ -30,18 +30,18 @@
 
 <section class="panel p-4">
   <div class="flex items-center justify-between gap-3">
-    <h2 class="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">Plan</h2>
+    <h2 class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Plan</h2>
     {#if total > 0}
-      <span class="font-mono text-[11px] text-slate-500">{completed}/{total} steps</span>
+      <span class="font-mono text-2xs text-muted-foreground/65">{completed}/{total} steps</span>
     {/if}
   </div>
 
   {#if plan.summary}
-    <p class="mt-2 text-[13px] leading-relaxed text-slate-300">{plan.summary}</p>
+    <p class="mt-2 text-sm leading-relaxed text-muted-foreground">{plan.summary}</p>
   {/if}
 
   {#if total > 0}
-    <div class="mt-3 h-1 overflow-hidden rounded-full bg-white/[0.06]" aria-hidden="true">
+    <div class="mt-3 h-1 overflow-hidden rounded-full bg-ink-800/80" aria-hidden="true">
       <div
         class="h-full rounded-full bg-mint-400 transition-all duration-700 ease-out"
         style={`width:${percent}%`}
@@ -51,11 +51,11 @@
     <ol class="mt-3 space-y-1">
       {#each plan.steps as step, index (step.id)}
         <li
-          class="animate-fade-up flex items-center gap-2.5 rounded-md px-1.5 py-1 transition-colors duration-200 hover:bg-white/[0.03]"
+          class="animate-fade-up flex items-center gap-2.5 rounded-md px-1.5 py-1 transition-colors duration-200 hover:bg-ink-800/60"
           style={`animation-delay:${Math.min(index * 60, 300)}ms`}
         >
           <span
-            class={`grid size-4.5 shrink-0 place-items-center rounded-full border text-[9px] font-semibold transition-colors duration-300 ${stepTone(
+            class={`grid size-4.5 shrink-0 place-items-center rounded-full border text-2xs font-semibold transition-colors duration-300 ${stepTone(
               step.status
             )}`}
           >
@@ -79,20 +79,24 @@
             {/if}
           </span>
           <span
-            class={`min-w-0 flex-1 truncate text-[13px] transition-colors duration-300 ${
-              step.status === "completed" ? "text-slate-500 line-through decoration-slate-700" : "text-slate-200"
+            class={`min-w-0 flex-1 truncate text-sm transition-colors duration-300 ${
+              step.status === "completed"
+                ? "text-muted-foreground/65 line-through decoration-foreground/20"
+                : "text-foreground"
             }`}
           >
             {step.title}
             {#if !step.required}
-              <span class="ml-1 text-[11px] text-slate-600">optional</span>
+              <span class="ml-1 text-2xs text-muted-foreground/65">optional</span>
             {/if}
           </span>
-          <span class="shrink-0 text-[11px] text-slate-600">{STATUS_LABELS[step.status]}</span>
+          <span class="shrink-0 text-2xs text-muted-foreground/65"
+            >{STATUS_LABELS[step.status]}</span
+          >
         </li>
       {/each}
     </ol>
   {:else}
-    <p class="mt-3 text-[13px] text-slate-500">No plan yet.</p>
+    <p class="mt-3 text-sm text-muted-foreground/65">No plan yet.</p>
   {/if}
 </section>

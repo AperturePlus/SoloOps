@@ -20,7 +20,7 @@
 </script>
 
 <div
-  class="flex items-center gap-3 rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2.5"
+  class="flex items-center gap-3 rounded-lg border border-edge bg-ink-800/60 px-3 py-2.5"
   role="status"
   aria-live="polite"
 >
@@ -29,8 +29,8 @@
     <span class="agent-dot size-1.5 rounded-full bg-mint-400" style="animation-delay:0.18s"></span>
     <span class="agent-dot size-1.5 rounded-full bg-mint-400" style="animation-delay:0.36s"></span>
   </span>
-  <span class="agent-shimmer-text text-[13px] font-medium">Working</span>
+  <span class="agent-shimmer-text text-sm font-medium">Working</span>
   {#if label}
-    <span class="text-xs text-slate-500 transition-all duration-500">{label}</span>
+    <span class="text-xs text-muted-foreground/65 transition-all duration-500">{label}</span>
   {/if}
 </div>

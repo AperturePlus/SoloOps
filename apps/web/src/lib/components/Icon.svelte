@@ -22,6 +22,7 @@
     | "gear"
     | "hash"
     | "info"
+    | "key"
     | "layers"
     | "layout"
     | "list"
@@ -43,11 +44,13 @@
     | "user"
     | "x";
 
+  // Icon sizes are locked to the type scale in docs/ui-spec.md §1.5:
+  // 12 = inline next to micro labels, 14 = standard, 16 = standalone icon buttons.
   let {
     name,
-    size = 16,
+    size = 14,
     class: className = ""
-  }: { name: IconName; size?: number; class?: string } = $props();
+  }: { name: IconName; size?: 12 | 14 | 16; class?: string } = $props();
 
   const PATHS: Record<IconName, string> = {
     activity: '<path d="M3 12h3l2.5-7 4 14 2.5-7h3" />',
@@ -73,6 +76,7 @@
     gear: '<circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />',
     hash: '<path d="M4 9h16" /><path d="M4 15h16" /><path d="M10 3 8 21" /><path d="M16 3l-2 18" />',
     info: '<circle cx="12" cy="12" r="9" /><path d="M12 8h.01" /><path d="M12 11v5" />',
+    key: '<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4Z" /><circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />',
     layers:
       '<path d="m12 2 8.5 5-8.5 5-8.5-5Z" /><path d="m4 12 8 4.7 8-4.7" /><path d="m4 17 8 4.7 8-4.7" />',
     layout:

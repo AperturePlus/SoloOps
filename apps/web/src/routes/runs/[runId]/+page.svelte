@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import type { EventEnvelope, RunDetail, RuntimeSnapshot } from "$lib/contracts";
+  import type { EventEnvelope, RunDetail, RuntimeSnapshot, TaskSummary } from "$lib/contracts";
   import { api, ApiClientError } from "$lib/api";
   import { formatDuration } from "$lib/time";
   import StatusBadge from "$lib/components/StatusBadge.svelte";
@@ -12,12 +12,16 @@
   import EvidenceList from "$lib/components/EvidenceList.svelte";
   import ReportCard from "$lib/components/ReportCard.svelte";
   import EventStream from "$lib/components/EventStream.svelte";
+  import ApprovalBanner from "$lib/components/ApprovalBanner.svelte";
   import Icon from "$lib/components/Icon.svelte";
+  import { Button } from "$lib/components/ui/button";
 
   let { data } = $props();
   let run = $state<RunDetail | null>(null);
+  let task = $state<TaskSummary | null>(null);
   let events = $state<EventEnvelope[]>([]);
   let runtime = $state<RuntimeSnapshot | null>(null);
+  let deciding = $state(false);
   let error = $state("");
   let socket: WebSocket | undefined;
 
@@ -36,6 +40,9 @@
   const elapsed = $derived(startedAt ? formatDuration((run?.finishedAt ?? now) - startedAt) : "");
   const toolNames = $derived(
     Object.fromEntries((runtime?.toolCalls ?? []).map((call) => [call.callId, call.name]))
+  );
+  const awaitingCalls = $derived(
+    (runtime?.toolCalls ?? []).filter((call) => call.status === "waiting_for_approval")
   );
   const shortRunId = $derived(data.runId.length > 10 ? data.runId.slice(0, 10) : data.runId);
 
@@ -74,15 +81,20 @@
   }
 
   async function decide(callId: string, decision: "approve" | "deny") {
-    await api(
-      `/api/runs/${encodeURIComponent(data.runId)}/tool-calls/${encodeURIComponent(callId)}/decision`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ decision })
-      }
-    );
-    await refreshRuntime();
+    deciding = true;
+    try {
+      await api(
+        `/api/runs/${encodeURIComponent(data.runId)}/tool-calls/${encodeURIComponent(callId)}/decision`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ decision })
+        }
+      );
+      await refreshRuntime();
+    } finally {
+      deciding = false;
+    }
   }
 
   async function cancelRun() {
@@ -156,6 +168,13 @@
         if (!run) {
           run = await api<RunDetail>(`/api/runs/${encodeURIComponent(data.runId)}`);
         }
+        if (!task && run.taskId) {
+          try {
+            task = await api<TaskSummary>(`/api/tasks/${encodeURIComponent(run.taskId)}`);
+          } catch {
+            task = null;
+          }
+        }
         await refreshRuntime();
         await fetchPersistedEvents();
         if (stopped) return;
@@ -219,15 +238,15 @@
 </script>
 
 <svelte:head>
-  <title>Run {shortRunId} · SoloOps</title>
+  <title>{task?.title ?? `Run ${shortRunId}`} · SoloOps</title>
 </svelte:head>
 
-<!-- ============ Top toolbar (sticky) ============ -->
+<!-- ============ Top toolbar (sticky, ui-spec.md §2 run-page exception) ============ -->
 <header
-  class="sticky top-0 z-20 flex h-13 items-center gap-3 border-b border-edge bg-ink-950/80 px-5 py-2.5 backdrop-blur-xl"
+  class="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-edge bg-ink-950/80 px-6 backdrop-blur-xl"
 >
   <a
-    class="grid size-8 shrink-0 place-items-center rounded-lg border border-white/10 text-slate-400 transition-all duration-200 hover:border-white/25 hover:text-slate-200"
+    class="grid size-8 shrink-0 place-items-center rounded-lg border border-edge text-muted-foreground transition-all duration-200 hover:border-edge-strong hover:text-foreground"
     href="/tasks"
     aria-label="Back to tasks"
   >
@@ -236,29 +255,32 @@
 
   <div class="min-w-0 flex-1">
     <div class="flex items-center gap-2">
-      <h1 class="truncate text-sm font-semibold tracking-tight text-slate-100">Run</h1>
-      <span class="font-mono text-[11px] text-slate-600">#{shortRunId}</span>
+      <h1 class="truncate text-sm font-semibold tracking-tight text-foreground">
+        {task?.title ?? "Run"}
+      </h1>
       {#if runtime}
-        <span class="hidden items-center gap-1 font-mono text-[11px] text-slate-500 sm:flex">
-          <Icon name="layers" size={11} />
+        <span class="hidden items-center gap-1 font-mono text-2xs text-muted-foreground/65 sm:flex">
+          <Icon name="layers" size={12} />
           {runtime.checkpoint.replace(/_/g, " ")}
         </span>
       {/if}
     </div>
-    <p class="truncate font-mono text-[10px] text-slate-600" title={data.runId}>{data.runId}</p>
+    <p class="truncate font-mono text-2xs text-muted-foreground/65" title={data.runId}>
+      {data.runId}
+    </p>
   </div>
 
   <div class="flex shrink-0 items-center gap-2.5">
     {#if elapsed}
       <span
-        class="hidden items-center gap-1.5 font-mono text-[11px] tabular-nums text-slate-400 md:flex"
+        class="hidden items-center gap-1.5 font-mono text-2xs tabular-nums text-muted-foreground md:flex"
       >
         <Icon name="clock" size={12} />
         {elapsed}
       </span>
     {/if}
     {#if isActive}
-      <span class="hidden items-center gap-1.5 text-[11px] text-slate-400 md:flex">
+      <span class="hidden items-center gap-1.5 text-2xs text-muted-foreground md:flex">
         <span
           class={`size-1.5 rounded-full ${error ? "animate-pulse bg-amber-300" : "agent-live-ring bg-mint-400"}`}
         ></span>
@@ -268,30 +290,25 @@
     {#if run}
       <StatusBadge status={run.status} />
       {#if !TERMINAL_STATUSES.has(run.status)}
-        <button
-          class="rounded-md border border-red-400/30 px-2.5 py-1 text-[13px] text-red-200 transition-all duration-200 hover:bg-red-400/10 active:scale-[0.97]"
-          onclick={cancelRun}
-        >
-          Cancel
-        </button>
+        <Button variant="destructive" size="sm" onclick={cancelRun}>Cancel</Button>
       {/if}
     {/if}
   </div>
 </header>
 
-<main class="mx-auto max-w-[1440px] px-5 py-5">
+<main class="mx-auto max-w-7xl px-6 py-5">
   {#if run?.statusReason || error}
     <div class="mb-4 space-y-2">
       {#if run?.statusReason}
         <div
-          class="animate-fade-up rounded-lg border border-amber-400/20 bg-amber-400/[0.06] p-3 text-[13px] leading-relaxed text-amber-100"
+          class="animate-fade-up rounded-lg border border-amber-400/20 bg-amber-400/[0.06] p-3 text-sm leading-relaxed text-amber-100"
         >
           {run.statusReason}
         </div>
       {/if}
       {#if error}
         <div
-          class="animate-fade-up flex items-center gap-2 rounded-lg border border-red-400/20 bg-red-400/[0.06] p-3 text-[13px] text-red-200"
+          class="animate-fade-up flex items-center gap-2 rounded-lg border border-red-400/20 bg-red-400/[0.06] p-3 text-sm text-red-200"
         >
           <span class="size-1.5 shrink-0 animate-pulse rounded-full bg-red-300"></span>
           {error}
@@ -303,16 +320,26 @@
   {#if !run && !error}
     <div class="grid grid-cols-12 gap-4" aria-hidden="true">
       <div class="col-span-12 space-y-4 lg:col-span-4">
-        <div class="h-40 animate-pulse rounded-xl bg-white/[0.04]"></div>
-        <div class="h-28 animate-pulse rounded-xl bg-white/[0.04]"></div>
-        <div class="h-40 animate-pulse rounded-xl bg-white/[0.04]"></div>
+        <div class="h-40 animate-pulse rounded-lg bg-ink-800/70"></div>
+        <div class="h-28 animate-pulse rounded-lg bg-ink-800/70"></div>
+        <div class="h-40 animate-pulse rounded-lg bg-ink-800/70"></div>
       </div>
       <div class="col-span-12 space-y-4 lg:col-span-8">
-        <div class="h-40 animate-pulse rounded-xl bg-white/[0.04]"></div>
-        <div class="h-72 animate-pulse rounded-xl bg-white/[0.04]"></div>
+        <div class="h-40 animate-pulse rounded-lg bg-ink-800/70"></div>
+        <div class="h-72 animate-pulse rounded-lg bg-ink-800/70"></div>
       </div>
     </div>
   {:else}
+    {#if runtime && awaitingCalls.length}
+      <div class="mb-4">
+        <ApprovalBanner
+          calls={awaitingCalls}
+          busy={deciding}
+          onDecide={(call, decision) => decide(call.callId, decision)}
+        />
+      </div>
+    {/if}
+
     <!-- ============ Composite grid: plan rail · activity · report rail ============ -->
     <div class="grid grid-cols-12 gap-4">
       <!-- ---- Left rail: plan · budget · working · tool calls ---- -->
@@ -343,10 +370,12 @@
               aria-label="Tool calls"
             >
               <div class="flex items-center justify-between px-1 pb-2">
-                <h2 class="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
+                <h2 class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                   Tool calls
                 </h2>
-                <span class="font-mono text-[11px] text-slate-500">{runtime.toolCalls.length}</span>
+                <span class="font-mono text-2xs text-muted-foreground/65"
+                  >{runtime.toolCalls.length}</span
+                >
               </div>
               <div class="agent-scroll max-h-80 space-y-1.5 overflow-y-auto pr-1">
                 {#each runtime.toolCalls as call (call.callId)}
@@ -364,35 +393,27 @@
       <!-- ---- Middle: activity stream (fixed-height internal scroll, fits viewport) ---- -->
       <div class="col-span-12 lg:col-span-8 xl:col-span-6">
         <section
-          class="panel animate-fade-up flex h-full min-h-[420px] flex-col overflow-hidden"
+          class="panel animate-fade-up flex h-full min-h-96 flex-col overflow-hidden"
           style="animation-delay:0.1s"
         >
           <div class="hairline flex h-10 shrink-0 items-center gap-2 px-3">
-            <Icon name="activity" size={13} class="text-slate-500" />
-            <h2 class="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
+            <Icon name="activity" size={14} class="text-muted-foreground/65" />
+            <h2 class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
               Activity
             </h2>
-            <span class="font-mono text-[11px] text-slate-500">{events.length}</span>
+            <span class="font-mono text-2xs text-muted-foreground/65">{events.length}</span>
             <span class="ml-auto flex items-center gap-2">
-              {#if isActive}
-                <span class="flex items-center gap-1.5 text-[11px] text-slate-500">
-                  <span
-                    class={`size-1.5 rounded-full ${error ? "animate-pulse bg-amber-300" : "agent-live-ring bg-mint-400"}`}
-                  ></span>
-                  {error ? "reconnecting" : "live"}
-                </span>
-              {/if}
               {#if !pinned}
                 <button
                   type="button"
-                  class="flex items-center gap-1 rounded-md border border-white/10 px-2 py-1 text-[11px] text-slate-300 transition-colors hover:border-white/20"
+                  class="flex items-center gap-1 rounded-md border border-edge px-2 py-1 text-2xs text-muted-foreground transition-colors hover:border-edge-strong"
                   onclick={() => {
                     pinned = true;
                     scrollActivity("smooth");
                   }}
                 >
                   Jump to latest
-                  <Icon name="chevron-down" size={11} />
+                  <Icon name="chevron-down" size={12} />
                 </button>
               {/if}
             </span>
@@ -407,7 +428,7 @@
             {#if events.length}
               <EventStream {events} {toolNames} />
             {:else}
-              <p class="px-3 py-8 text-center text-[13px] text-slate-600">
+              <p class="px-3 py-8 text-center text-sm text-muted-foreground/65">
                 No activity yet — waiting for the run to start.
               </p>
             {/if}
@@ -434,12 +455,12 @@
           {:else}
             <section class="panel animate-fade-up p-5" style="animation-delay:0.14s">
               <div class="flex items-center gap-2">
-                <Icon name="file" size={13} class="text-slate-500" />
-                <h2 class="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
+                <Icon name="file" size={14} class="text-muted-foreground/65" />
+                <h2 class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                   Report
                 </h2>
               </div>
-              <p class="mt-3 text-[12.5px] leading-relaxed text-slate-500">
+              <p class="mt-3 text-sm leading-relaxed text-muted-foreground/65">
                 No report or evidence yet — it appears as soon as the agent produces it.
               </p>
             </section>

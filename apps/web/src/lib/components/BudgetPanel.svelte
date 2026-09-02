@@ -32,9 +32,9 @@
 
 <section class="panel p-4">
   <div class="flex items-center justify-between gap-3">
-    <h2 class="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">Budget</h2>
+    <h2 class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Budget</h2>
     {#if usage.elapsedMs > 0}
-      <span class="font-mono text-[11px] text-slate-500"
+      <span class="font-mono text-2xs text-muted-foreground/65"
         >elapsed {Math.round(usage.elapsedMs / 1000)}s</span
       >
     {/if}
@@ -43,24 +43,29 @@
   <dl class="mt-3 space-y-2.5">
     {#each meters as meter (meter.label)}
       <div class="flex items-center gap-3">
-        <dt class="w-14 shrink-0 text-[11px] text-slate-500">{meter.label}</dt>
-        <div class="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-white/[0.06]" aria-hidden="true">
+        <dt class="w-14 shrink-0 text-2xs text-muted-foreground/65">{meter.label}</dt>
+        <div
+          class="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-ink-800/80"
+          aria-hidden="true"
+        >
           <div
             class={`h-full rounded-full transition-all duration-700 ease-out ${meter.tone}`}
             style={`width:${meter.percent}%`}
           ></div>
         </div>
-        <dd class="w-16 shrink-0 text-right font-mono text-[11px] tabular-nums text-slate-300">
+        <dd class="w-16 shrink-0 text-right font-mono text-2xs tabular-nums text-muted-foreground">
           {meter.max > 0 ? formatTokens(meter.used) : meter.used}
           {#if meter.max > 0}
-            <span class="text-slate-600">/{formatTokens(meter.max)}</span>
+            <span class="text-muted-foreground/65">/{formatTokens(meter.max)}</span>
           {/if}
         </dd>
       </div>
     {/each}
   </dl>
 
-  <p class="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-white/5 pt-2.5 text-[11px] text-slate-600">
+  <p
+    class="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-edge pt-2.5 text-2xs text-muted-foreground/65"
+  >
     <span>cached {formatTokens(usage.cachedInputTokens)}</span>
     <span>writes {formatTokens(usage.cacheWriteInputTokens)}</span>
     <span>workspace rev #{workspaceRevision}</span>

@@ -2,6 +2,8 @@
   import { goto } from "$app/navigation";
   import { api } from "$lib/api";
   import Icon, { type IconName } from "$lib/components/Icon.svelte";
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
 
   let username = $state("owner");
   let password = $state("");
@@ -72,18 +74,18 @@
           <Icon name="command" size={16} />
         </span>
         <div>
-          <p class="text-sm font-semibold tracking-tight text-slate-100">SoloOps</p>
-          <p class="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-600">
+          <p class="text-sm font-semibold tracking-tight text-foreground">SoloOps</p>
+          <p class="text-2xs font-medium uppercase tracking-[0.18em] text-muted-foreground/65">
             Private control plane
           </p>
         </div>
       </div>
 
       <div class="mt-12 max-w-sm">
-        <h1 class="text-[26px] font-semibold leading-tight tracking-tight text-slate-100">
+        <h1 class="text-2xl font-semibold leading-tight tracking-tight text-foreground">
           Run durable agents on your own machine.
         </h1>
-        <p class="mt-3 text-[13px] leading-relaxed text-slate-400">
+        <p class="mt-3 text-sm leading-relaxed text-muted-foreground">
           A private execution queue for goal-driven work — planned, gated, measured and reported
           under your control.
         </p>
@@ -93,13 +95,13 @@
         {#each CAPABILITIES as item (item.icon)}
           <li class="flex gap-3">
             <span
-              class="mt-0.5 grid size-7 shrink-0 place-items-center rounded-md border border-white/10 bg-white/[0.03] text-slate-300"
+              class="mt-0.5 grid size-7 shrink-0 place-items-center rounded-md border border-edge bg-ink-800/60 text-muted-foreground"
             >
-              <Icon name={item.icon} size={13} />
+              <Icon name={item.icon} size={14} />
             </span>
             <div>
-              <p class="text-[12.5px] font-semibold text-slate-200">{item.title}</p>
-              <p class="mt-1 text-[11.5px] leading-relaxed text-slate-500">{item.text}</p>
+              <p class="text-sm font-semibold text-foreground">{item.title}</p>
+              <p class="mt-1 text-xs leading-relaxed text-muted-foreground/65">{item.text}</p>
             </div>
           </li>
         {/each}
@@ -107,7 +109,7 @@
     </div>
 
     <!-- Run lifecycle flow strip -->
-    <div class="relative z-10 border-t border-white/5 px-10 py-5">
+    <div class="relative z-10 border-t border-edge px-10 py-5">
       <div class="flex items-center gap-2.5">
         {#each FLOW as stage, index (stage)}
           <div class="flow-step" data-state={index < 3 ? "done" : index === 3 ? "current" : "idle"}>
@@ -116,13 +118,13 @@
                 index < 3
                   ? "bg-mint-400"
                   : index === 3
-                    ? "bg-slate-200 agent-live-ring"
-                    : "bg-slate-700"
+                    ? "bg-foreground agent-live-ring"
+                    : "bg-muted-foreground/65"
               }`}
             ></span>
             {stage}
             {#if index < FLOW.length - 1}
-              <span class="h-px w-5 bg-white/10"></span>
+              <span class="h-px w-5 bg-edge-strong"></span>
             {/if}
           </div>
         {/each}
@@ -133,48 +135,34 @@
   <!-- Right: sign-in pane -->
   <main class="flex min-w-0 flex-1 items-center justify-center p-8">
     <div class="w-full max-w-sm">
-      <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-mint-400">
+      <p class="text-2xs font-medium uppercase tracking-[0.24em] text-mint-400">
         Private control plane
       </p>
-      <h1 class="mt-2 text-2xl font-semibold tracking-tight text-slate-100">Owner sign in</h1>
-      <p class="mt-2 text-[13px] leading-relaxed text-slate-400">
+      <h1 class="mt-2 text-2xl font-semibold tracking-tight text-foreground">Owner sign in</h1>
+      <p class="mt-2 text-sm leading-relaxed text-muted-foreground">
         Use the Owner account initialized from the local terminal.
       </p>
 
       <form
-        class="mt-8 space-y-5 rounded-2xl border border-white/10 bg-ink-900/80 p-6 shadow-2xl"
+        class="mt-8 space-y-4 rounded-lg border border-edge bg-ink-900/80 p-6 shadow-2xl"
         onsubmit={login}
       >
         <label class="block">
-          <span class="mb-2 block text-sm text-slate-300">Username</span>
-          <input
-            class="w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-2.5 outline-none focus:border-mint-400"
-            bind:value={username}
-            autocomplete="username"
-            required
-          />
+          <span class="mb-2 block text-sm text-foreground">Username</span>
+          <Input bind:value={username} autocomplete="username" required />
         </label>
         <label class="block">
-          <span class="mb-2 block text-sm text-slate-300">Password</span>
-          <input
-            class="w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-2.5 outline-none focus:border-mint-400"
-            type="password"
-            bind:value={password}
-            autocomplete="current-password"
-            required
-          />
+          <span class="mb-2 block text-sm text-foreground">Password</span>
+          <Input bind:value={password} type="password" autocomplete="current-password" required />
         </label>
         {#if error}<p class="text-sm text-red-300">{error}</p>{/if}
-        <button
-          class="w-full rounded-lg bg-mint-400 px-4 py-2.5 font-semibold text-ink-950 transition hover:bg-mint-500 disabled:opacity-50"
-          disabled={submitting}
-        >
+        <Button class="w-full" type="submit" disabled={submitting}>
           {submitting ? "Signing in…" : "Sign in"}
-        </button>
+        </Button>
       </form>
 
-      <p class="mt-6 flex items-center justify-center gap-1.5 text-[11px] text-slate-600">
-        <Icon name="lock" size={11} />
+      <p class="mt-6 flex items-center justify-center gap-1.5 text-2xs text-muted-foreground/65">
+        <Icon name="lock" size={12} />
         Session is local to this browser only.
       </p>
     </div>
