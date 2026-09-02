@@ -366,21 +366,58 @@ impl Tool for WorkspaceRead {
         let bytes = fs::read(&path).await?;
         let text =
             String::from_utf8(bytes).map_err(|_| ToolError::Execution("file is not UTF-8".to_owned()))?;
-        let selected = text
-            .lines()
-            .skip(input.start_line.saturating_sub(1))
-            .take(input.max_lines.clamp(1, 500))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let total_lines = text.lines().count();
+        let start = input.start_line.max(1);
+        let take = input.max_lines.clamp(1, 500);
+        let selected: Vec<&str> = text.lines().skip(start.saturating_sub(1)).take(take).collect();
+        let end_line = start + selected.len();
         let digest = format!("{:x}", Sha256::digest(text.as_bytes()));
-        let (content, artifact_ref, truncated) = bounded_text(context, "workspace-read", &selected).await?;
+        let bounded = truncate_output(
+            context,
+            "workspace-read",
+            &selected.join("\n"),
+            TruncationKeep::Head,
+        )
+        .await?;
+        let mut value = json!({
+            "path": input.path,
+            "startLine": start,
+            "endLine": end_line,
+            "totalLines": total_lines,
+            "content": bounded.content,
+            "sha256": digest,
+            "truncated": bounded.truncated,
+            "artifactRef": bounded.artifact_ref,
+        });
+        let mut note = None;
+        if end_line < total_lines {
+            note = Some(format!(
+                "Showing lines {start}-{end_line} of {total_lines}; continue reading with startLine={}.",
+                end_line + 1
+            ));
+        }
+        if bounded.truncated {
+            let artifact_note = format!(
+                "Output exceeded the {} line / {} byte budget; the full range is stored as artifact {}.",
+                MAX_OUTPUT_LINES,
+                context.max_output_bytes,
+                bounded.artifact_ref.as_deref().unwrap_or_default()
+            );
+            note = Some(match note {
+                Some(existing) => format!("{existing} {artifact_note}"),
+                None => artifact_note,
+            });
+        }
+        if let Some(note) = note {
+            value["note"] = json!(note);
+        }
         Ok(ToolOutput {
-            summary: format!("Read {} from line {}", input.path, input.start_line),
-            value: json!({"path": input.path, "content": content, "sha256": digest, "truncated": truncated, "artifactRef": artifact_ref}),
+            summary: format!("Read {} lines {}-{}", input.path, start, end_line),
+            value,
             evidence: Some(ToolEvidence {
                 kind: "file_snapshot".to_owned(),
                 summary: format!("Observed {} at SHA-256 {}", input.path, digest),
-                artifact_ref,
+                artifact_ref: bounded.artifact_ref,
                 content_sha256: Some(digest),
             }),
             increments_workspace: false,
@@ -886,7 +923,9 @@ impl Tool for SandboxExec {
     fn descriptor(&self) -> ToolDescriptor {
         descriptor(
             "sandbox.exec",
-            "Run one allowlisted executable inside an ephemeral, offline Docker sandbox without a shell.",
+            "Run one allowlisted executable inside an ephemeral, offline Docker sandbox without a shell. \
+             A non-zero exit code is a normal result: the exit code plus captured stdout and stderr are \
+             returned so failures can be diagnosed.",
             schema(
                 json!({
                     "program": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}, "maxItems": 128},
@@ -907,34 +946,23 @@ impl Tool for SandboxExec {
             .to_owned();
         let output = self.executor.execute_sandbox(context, arguments).await?;
         let full = format!("stdout:\n{}\nstderr:\n{}", output.stdout, output.stderr);
+        let bounded = truncate_output(context, "sandbox-output", &full, TruncationKeep::Tail).await?;
+        let exit = output.exit_code;
         let summary = format!(
             "{} in {} exited with {}",
             program,
             output.image,
-            output
-                .exit_code
-                .map_or_else(|| "signal".to_owned(), |value| value.to_string())
+            exit.map_or_else(|| "signal".to_owned(), |value| value.to_string())
         );
-        if output.exit_code != Some(0) {
-            return Err(ToolError::Execution(summary));
-        }
-        Ok(ToolOutput {
-            value: json!({
-                "exitCode": output.exit_code,
-                "output": full,
-                "image": output.image,
-                "truncated": false,
-                "artifactRef": Value::Null,
-            }),
-            summary: summary.clone(),
-            evidence: Some(ToolEvidence {
-                kind: "command_result".to_owned(),
-                summary,
-                artifact_ref: None,
-                content_sha256: Some(format!("{:x}", Sha256::digest(full.as_bytes()))),
-            }),
-            increments_workspace: true,
-        })
+        Ok(command_tool_output(
+            &summary,
+            exit,
+            Some(output.image),
+            format!("{:x}", Sha256::digest(full.as_bytes())),
+            true,
+            bounded,
+            context,
+        ))
     }
 }
 
@@ -943,7 +971,9 @@ impl Tool for ProcessExec {
     fn descriptor(&self) -> ToolDescriptor {
         descriptor(
             "process.exec",
-            "Run one explicitly allowlisted executable without a shell.",
+            "Run one explicitly allowlisted executable without a shell. A non-zero exit \
+             code is a normal result: the exit code plus captured stdout and stderr are \
+             returned so failures can be diagnosed.",
             schema(
                 json!({
                     "program": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}, "maxItems": 128},
@@ -963,34 +993,67 @@ impl Tool for ProcessExec {
             .unwrap_or("process")
             .to_owned();
         let output = self.executor.execute_process(context, arguments).await?;
-        let stdout = output.stdout;
-        let stderr = output.stderr;
-        let full = format!("stdout:\n{stdout}\nstderr:\n{stderr}");
-        let content = full.clone();
-        let artifact_ref: Option<String> = None;
-        let truncated = false;
-        let code = output.exit_code;
+        let full = format!("stdout:\n{}\nstderr:\n{}", output.stdout, output.stderr);
+        let bounded = truncate_output(context, "process-output", &full, TruncationKeep::Tail).await?;
+        let exit = output.exit_code.map(i64::from);
         let summary = format!(
             "{} exited with {}",
             program,
-            code.map_or_else(|| "signal".to_owned(), |value| value.to_string())
+            exit.map_or_else(|| "signal".to_owned(), |value| value.to_string())
         );
-        let value =
-            json!({"exitCode": code, "output": content, "truncated": truncated, "artifactRef": artifact_ref});
-        if code != Some(0) {
-            return Err(ToolError::Execution(summary));
-        }
-        Ok(ToolOutput {
-            value,
-            summary: summary.clone(),
-            evidence: Some(ToolEvidence {
-                kind: "command_result".to_owned(),
-                summary,
-                artifact_ref,
-                content_sha256: Some(format!("{:x}", Sha256::digest(full.as_bytes()))),
-            }),
-            increments_workspace: false,
-        })
+        Ok(command_tool_output(
+            &summary,
+            exit,
+            None,
+            format!("{:x}", Sha256::digest(full.as_bytes())),
+            false,
+            bounded,
+            context,
+        ))
+    }
+}
+
+/// Shared projection for exec-style tools: a non-zero exit code is a business result
+/// handed back to the model, not a tool failure. Infrastructure failures (spawn,
+/// socket, timeout) still travel through `ToolError`.
+fn command_tool_output(
+    summary: &str,
+    exit_code: Option<i64>,
+    image: Option<String>,
+    content_sha256: String,
+    increments_workspace: bool,
+    bounded: BoundedOutput,
+    context: &ToolContext,
+) -> ToolOutput {
+    let mut value = json!({
+        "exitCode": exit_code,
+        "output": bounded.content,
+        "truncated": bounded.truncated,
+        "artifactRef": bounded.artifact_ref,
+        "totalLines": bounded.total_lines,
+        "outputLines": bounded.output_lines,
+    });
+    if let Some(image) = image {
+        value["image"] = json!(image);
+    }
+    if bounded.truncated {
+        value["note"] = json!(format!(
+            "Output exceeded the {} line / {} byte budget; the tail is shown and the full output is stored as artifact {}.",
+            MAX_OUTPUT_LINES,
+            context.max_output_bytes,
+            bounded.artifact_ref.as_deref().unwrap_or_default()
+        ));
+    }
+    ToolOutput {
+        value,
+        summary: summary.to_owned(),
+        evidence: Some(ToolEvidence {
+            kind: "command_result".to_owned(),
+            summary: summary.to_owned(),
+            artifact_ref: bounded.artifact_ref,
+            content_sha256: Some(content_sha256),
+        }),
+        increments_workspace,
     }
 }
 
@@ -1157,23 +1220,107 @@ async fn ensure_workspace_capacity(context: &ToolContext, additional: u64) -> Re
     Ok(())
 }
 
-async fn bounded_text(
+/// Line budget applied to every tool output before it reaches the model context.
+pub(crate) const MAX_OUTPUT_LINES: usize = 2000;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TruncationKeep {
+    /// Keep the beginning of the output (paged reads resume forward).
+    Head,
+    /// Keep the end of the output (command failures usually surface at the tail).
+    Tail,
+}
+
+pub(crate) struct BoundedOutput {
+    pub content: String,
+    pub artifact_ref: Option<String>,
+    pub truncated: bool,
+    pub total_lines: usize,
+    pub output_lines: usize,
+}
+
+/// Bound `text` for the model context with a dual line/byte budget, never cutting a
+/// line in half. When either budget trips, the full text is persisted as an artifact
+/// for the Owner and the returned content advertises the artifact reference.
+pub(crate) async fn truncate_output(
     context: &ToolContext,
     prefix: &str,
     text: &str,
-) -> Result<(String, Option<String>, bool), ToolError> {
-    if text.len() <= context.max_output_bytes {
-        return Ok((text.to_owned(), None, false));
+    keep: TruncationKeep,
+) -> Result<BoundedOutput, ToolError> {
+    let total_lines = text.lines().count();
+    if text.len() <= context.max_output_bytes && total_lines <= MAX_OUTPUT_LINES {
+        return Ok(BoundedOutput {
+            content: text.to_owned(),
+            artifact_ref: None,
+            truncated: false,
+            total_lines,
+            output_lines: total_lines,
+        });
     }
     fs::create_dir_all(&context.artifacts).await?;
-    let name = format!("{prefix}-{}.txt", Uuid::new_v4());
-    let path = context.artifacts.join(&name);
-    fs::write(&path, text.as_bytes()).await?;
-    let mut boundary = context.max_output_bytes.min(text.len());
-    while boundary > 0 && !text.is_char_boundary(boundary) {
-        boundary -= 1;
+    let artifact_ref = format!("{prefix}-{}.txt", Uuid::new_v4());
+    fs::write(context.artifacts.join(&artifact_ref), text.as_bytes()).await?;
+
+    let mut lines: VecDeque<&str> = text.lines().collect();
+    while lines.len() > MAX_OUTPUT_LINES {
+        match keep {
+            TruncationKeep::Head => {
+                lines.pop_back();
+            }
+            TruncationKeep::Tail => {
+                lines.pop_front();
+            }
+        }
     }
-    Ok((text[..boundary].to_owned(), Some(name), true))
+    let mut selected: Vec<&str> = lines.into();
+    let mut size = selected
+        .iter()
+        .map(|line| line.len().saturating_add(1))
+        .sum::<usize>();
+    while selected.len() > 1 && size > context.max_output_bytes {
+        let dropped = match keep {
+            TruncationKeep::Head => selected.pop(),
+            TruncationKeep::Tail => Some(selected.remove(0)),
+        };
+        match dropped {
+            Some(line) => size = size.saturating_sub(line.len().saturating_add(1)),
+            None => break,
+        }
+    }
+    let mut content = selected.join("\n");
+    if content.len() > context.max_output_bytes {
+        // A single line can still exceed the byte budget; cut it at a character boundary.
+        content = char_bounded_slice(&content, context.max_output_bytes, keep);
+    }
+    let output_lines = content.lines().count();
+    Ok(BoundedOutput {
+        content,
+        artifact_ref: Some(artifact_ref),
+        truncated: true,
+        total_lines,
+        output_lines,
+    })
+}
+
+fn char_bounded_slice(text: &str, limit: usize, keep: TruncationKeep) -> String {
+    let limit = limit.min(text.len());
+    match keep {
+        TruncationKeep::Head => {
+            let mut boundary = limit;
+            while boundary > 0 && !text.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            text[..boundary].to_owned()
+        }
+        TruncationKeep::Tail => {
+            let mut start = text.len() - limit;
+            while start < text.len() && !text.is_char_boundary(start) {
+                start += 1;
+            }
+            text[start..].to_owned()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1184,6 +1331,10 @@ mod tests {
     struct NoopHostExecutor;
 
     struct NonzeroSandboxExecutor;
+
+    struct FailingProcessExecutor {
+        stdout_bytes: usize,
+    }
 
     #[async_trait]
     impl HostExecutor for NoopHostExecutor {
@@ -1226,6 +1377,29 @@ mod tests {
                 image: "sandbox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     .into(),
             })
+        }
+    }
+
+    #[async_trait]
+    impl HostExecutor for FailingProcessExecutor {
+        async fn execute_process(
+            &self,
+            _context: &ToolContext,
+            _arguments: Value,
+        ) -> Result<HostProcessOutput, ToolError> {
+            Ok(HostProcessOutput {
+                exit_code: Some(1),
+                stdout: "compile started\n".repeat(self.stdout_bytes),
+                stderr: "error[E0308]: mismatched types while compiling demo\n".repeat(20),
+            })
+        }
+
+        async fn execute_sandbox(
+            &self,
+            _context: &ToolContext,
+            _arguments: Value,
+        ) -> Result<HostSandboxOutput, ToolError> {
+            unreachable!()
         }
     }
 
@@ -1272,7 +1446,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sandbox_exec_treats_nonzero_exit_as_execution_failure() {
+    async fn sandbox_exec_returns_nonzero_exit_output_as_a_model_visible_result() {
         let temp = tempfile::tempdir().unwrap();
         let context = ToolContext {
             run_id: "run".into(),
@@ -1286,17 +1460,178 @@ mod tests {
             executor: Arc::new(NonzeroSandboxExecutor),
         };
 
-        let error = tool
+        let output = tool
             .execute(&context, json!({"program": "cargo", "args": ["test"]}))
             .await
-            .unwrap_err();
-        match error {
-            ToolError::Execution(message) => assert_eq!(
-                message,
-                "cargo in sandbox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa exited with 7"
-            ),
-            other => panic!("expected execution error, got {other:?}"),
-        }
+            .unwrap();
+        assert_eq!(output.value["exitCode"], json!(7));
+        let text = output.value["output"].as_str().unwrap();
+        assert!(text.contains("captured stdout"));
+        assert!(text.contains("captured stderr"));
+        assert_eq!(output.value["truncated"], json!(false));
+        assert_eq!(
+            output.summary,
+            "cargo in sandbox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa exited with 7"
+        );
+        assert!(output.increments_workspace);
+    }
+
+    #[tokio::test]
+    async fn process_exec_returns_nonzero_exit_with_stdout_and_stderr() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = ToolContext {
+            run_id: "run".into(),
+            call_id: "call-process".into(),
+            workspace: temp.path().join("workspace"),
+            artifacts: temp.path().join("artifacts"),
+            max_output_bytes: 64 * 1024,
+            max_workspace_bytes: 1024 * 1024,
+        };
+        let tool = ProcessExec {
+            executor: Arc::new(FailingProcessExecutor { stdout_bytes: 4 }),
+        };
+
+        let output = tool
+            .execute(&context, json!({"program": "cargo", "args": ["build"]}))
+            .await
+            .unwrap();
+        assert_eq!(output.value["exitCode"], json!(1));
+        assert!(output.value["output"].as_str().unwrap().contains("error[E0308]"));
+        assert_eq!(output.summary, "cargo exited with 1");
+        assert!(!output.increments_workspace);
+        let evidence = output.evidence.unwrap();
+        assert_eq!(evidence.kind, "command_result");
+        assert!(
+            evidence
+                .content_sha256
+                .as_deref()
+                .is_some_and(|digest| digest.len() == 64)
+        );
+    }
+
+    #[tokio::test]
+    async fn process_exec_truncates_huge_output_to_the_tail_and_persists_an_artifact() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = ToolContext {
+            run_id: "run".into(),
+            call_id: "call-process".into(),
+            workspace: temp.path().join("workspace"),
+            artifacts: temp.path().join("artifacts"),
+            max_output_bytes: 1024,
+            max_workspace_bytes: 1024 * 1024,
+        };
+        let tool = ProcessExec {
+            executor: Arc::new(FailingProcessExecutor { stdout_bytes: 5000 }),
+        };
+
+        let output = tool
+            .execute(&context, json!({"program": "cargo", "args": ["build"]}))
+            .await
+            .unwrap();
+        assert_eq!(output.value["truncated"], json!(true));
+        let text = output.value["output"].as_str().unwrap();
+        // The tail is preserved: compiler errors surface at the end of the output.
+        assert!(text.contains("error[E0308]"));
+        assert!(!text.contains("compile started"));
+        assert!(
+            text.len() <= 2048,
+            "content should respect the byte budget, got {}",
+            text.len()
+        );
+        let artifact_ref = output.value["artifactRef"].as_str().unwrap().to_owned();
+        assert!(artifact_ref.starts_with("process-output-"));
+        let persisted = fs::read_to_string(context.artifacts.join(&artifact_ref))
+            .await
+            .unwrap();
+        assert!(persisted.contains("compile started"));
+        assert!(persisted.len() > context.max_output_bytes);
+        let evidence = output.evidence.unwrap();
+        assert_eq!(evidence.artifact_ref.as_deref(), Some(artifact_ref.as_str()));
+        let note = output.value["note"].as_str().unwrap();
+        assert!(note.contains(artifact_ref.as_str()));
+    }
+
+    #[tokio::test]
+    async fn truncate_output_never_cuts_a_line_in_half() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = ToolContext {
+            run_id: "run".into(),
+            call_id: "call-truncate".into(),
+            workspace: temp.path().join("workspace"),
+            artifacts: temp.path().join("artifacts"),
+            max_output_bytes: 300,
+            max_workspace_bytes: 1024 * 1024,
+        };
+        let text = (0..2000)
+            .map(|index| format!("line-{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let tail = truncate_output(&context, "tail", &text, TruncationKeep::Tail)
+            .await
+            .unwrap();
+        assert!(tail.truncated);
+        assert_eq!(tail.total_lines, 2000);
+        assert!(
+            tail.content.ends_with("line-1999"),
+            "tail should keep the last lines"
+        );
+        assert!(
+            tail.content.starts_with("line-19"),
+            "only the final lines survive the byte budget"
+        );
+        assert_eq!(tail.output_lines, tail.content.lines().count());
+        assert!(tail.content.len() <= context.max_output_bytes + 10);
+        let head = truncate_output(&context, "head", &text, TruncationKeep::Head)
+            .await
+            .unwrap();
+        assert!(head.content.starts_with("line-0"));
+        assert!(head.content.lines().all(|line| line.starts_with("line-")));
+
+        let unbounded = truncate_output(
+            &ToolContext {
+                run_id: context.run_id.clone(),
+                call_id: context.call_id.clone(),
+                workspace: context.workspace.clone(),
+                artifacts: context.artifacts.clone(),
+                max_output_bytes: 1_000_000,
+                max_workspace_bytes: context.max_workspace_bytes,
+            },
+            "none",
+            "small\noutput",
+            TruncationKeep::Tail,
+        )
+        .await
+        .unwrap();
+        assert!(!unbounded.truncated);
+        assert_eq!(unbounded.content, "small\noutput");
+        assert!(unbounded.artifact_ref.is_none());
+    }
+
+    #[tokio::test]
+    async fn truncate_output_handles_multibyte_lines_at_the_byte_budget() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = ToolContext {
+            run_id: "run".into(),
+            call_id: "call-truncate".into(),
+            workspace: temp.path().join("workspace"),
+            artifacts: temp.path().join("artifacts"),
+            max_output_bytes: 64,
+            max_workspace_bytes: 1024 * 1024,
+        };
+        // One 3-byte-per-character line that alone exceeds the budget.
+        let text = "中文输出".repeat(50);
+
+        let bounded = truncate_output(&context, "mbcs", &text, TruncationKeep::Tail)
+            .await
+            .unwrap();
+        assert!(bounded.truncated);
+        assert!(bounded.content.len() <= 64);
+        assert_eq!(bounded.output_lines, 1);
+        let persisted = fs::read_to_string(context.artifacts.join(bounded.artifact_ref.as_deref().unwrap()))
+            .await
+            .unwrap();
+        assert_eq!(persisted, text);
     }
 
     #[tokio::test]
