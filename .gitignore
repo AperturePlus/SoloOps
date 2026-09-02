@@ -22,3 +22,12 @@ apps/web/.vite/
 .DS_Store
 Thumbs.db
 .workbuddy/
+
+# External reference checkouts (Pi agent)
+参考/
+
+# Local SoloOps runtime state scratch files
+outputs/.callid.txt
+outputs/.run.json
+outputs/.runtime*.json
+outputs/.task.json
