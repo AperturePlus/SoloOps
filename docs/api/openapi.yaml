@@ -296,6 +296,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TestIpNotificationResponse"
+  /api/settings/ssh-access:
+    get:
+      operationId: getSshAccessReport
+      security:
+        - ownerSession: []
+      responses:
+        "200":
+          description: Audit of the local authorized_keys files
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SshAccessReport"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 components:
   securitySchemes:
     ownerSession:
@@ -436,6 +450,104 @@ components:
           items:
             type: string
             format: email
+    SshAuthorizedKeyEntry:
+      type: object
+      required:
+        [
+          line,
+          keyType,
+          keyBits,
+          fingerprint,
+          comment,
+          machine,
+          options,
+          fromPatterns,
+          forcedCommand,
+          valid,
+          error
+        ]
+      properties:
+        line:
+          type: integer
+          minimum: 1
+        keyType:
+          type: [string, "null"]
+        keyBits:
+          type: [integer, "null"]
+          minimum: 0
+        fingerprint:
+          type: [string, "null"]
+        comment:
+          type: [string, "null"]
+        machine:
+          type: [string, "null"]
+        options:
+          type: array
+          items:
+            type: string
+        fromPatterns:
+          type: [array, "null"]
+          items:
+            type: string
+        forcedCommand:
+          type: [string, "null"]
+        valid:
+          type: boolean
+        error:
+          type: [string, "null"]
+    SshAuthorizedKeysFile:
+      type: object
+      required: [path, role, exists, entries, error]
+      properties:
+        path:
+          type: string
+        role:
+          type: string
+          enum: [user, administrators]
+        exists:
+          type: boolean
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/SshAuthorizedKeyEntry"
+        error:
+          type: [string, "null"]
+    SshMachineSummary:
+      type: object
+      required: [name, keyCount]
+      properties:
+        name:
+          type: [string, "null"]
+        keyCount:
+          type: integer
+          minimum: 0
+    SshAccessReport:
+      type: object
+      required: [scannedAt, user, homeDir, platform, totalKeys, invalidLines, machines, files]
+      properties:
+        scannedAt:
+          type: integer
+          format: int64
+        user:
+          type: [string, "null"]
+        homeDir:
+          type: [string, "null"]
+        platform:
+          type: string
+        totalKeys:
+          type: integer
+          minimum: 0
+        invalidLines:
+          type: integer
+          minimum: 0
+        machines:
+          type: array
+          items:
+            $ref: "#/components/schemas/SshMachineSummary"
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/SshAuthorizedKeysFile"
     CreateTaskRequest:
       type: object
       required: [title, goal]

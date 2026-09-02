@@ -15,6 +15,7 @@ SoloOps 是面向单一 Owner 的私有 Agent 控制平面。后端、任务运�
 - 不可变 Compose/Caddy 提案、脱敏审批预览、digest-pinned 离线部署、健康验证和自动回滚；
 - JSON 结构化日志、请求 ID、审计日志、健康检查、就绪检查和 Prometheus 文本指标；
 - Owner 可配置多收件邮箱，在公网 IPv4 首次检测或变化时通过 SMTP 逐一通知；
+- SSH 访问审计：解析本机 `authorized_keys`，按来源机器汇总可免密登录的公钥、指纹与 `from`/`command` 限制；
 - Windows/Linux 常规 CI、浏览器 E2E 后台错误门禁，以及手动 Linux Docker/Caddy 发布验收；
 - 纯静态 Svelte WebUI，可由 Rust API 或 Caddy 提供。
 

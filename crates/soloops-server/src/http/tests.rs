@@ -377,3 +377,70 @@ async fn owner_manages_ip_notification_recipients_and_requires_smtp_to_enable() 
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["error"]["code"], "notification_transport_unconfigured");
 }
+
+#[tokio::test]
+async fn ssh_access_report_requires_owner_session_and_is_self_consistent() {
+    let (router, _) = context().await;
+    let unauthorized = router
+        .clone()
+        .oneshot(
+            Request::get("/api/settings/ssh-access")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let cookie = login_cookie(&router).await;
+    let response = router
+        .oneshot(
+            Request::get("/api/settings/ssh-access")
+                .header(COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let report: SshAccessReport = serde_json::from_slice(&body).unwrap();
+
+    assert!(report.scanned_at > 0);
+    assert!(matches!(report.platform.as_str(), "windows" | "linux"));
+    assert!(
+        report
+            .files
+            .iter()
+            .any(|file| file.role == soloops_domain::SshKeyFileRole::User)
+    );
+
+    let valid_keys: u32 = report
+        .files
+        .iter()
+        .map(|file| file.entries.iter().filter(|entry| entry.valid).count() as u32)
+        .sum();
+    assert_eq!(valid_keys, report.total_keys);
+    assert_eq!(
+        report
+            .machines
+            .iter()
+            .map(|machine| machine.key_count)
+            .sum::<u32>(),
+        report.total_keys
+    );
+
+    // Fingerprints use the OpenSSH SHA256 format on every valid entry.
+    for file in &report.files {
+        for entry in &file.entries {
+            if entry.valid {
+                assert!(
+                    entry
+                        .fingerprint
+                        .as_deref()
+                        .is_some_and(|value| value.starts_with("SHA256:"))
+                );
+            }
+        }
+    }
+}

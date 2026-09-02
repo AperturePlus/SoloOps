@@ -32,8 +32,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use soloops_domain::{
     ApiErrorResponse, ApprovalDecisionRequest, CreateTaskRequest, IpNotificationSettings, LoginRequest,
-    Owner, RunDetail, RuntimeSnapshot, SessionResponse, TaskSummary, TestIpNotificationResponse,
-    ToolCallSummary, UpdateIpNotificationSettingsRequest,
+    Owner, RunDetail, RuntimeSnapshot, SessionResponse, SshAccessReport, TaskSummary,
+    TestIpNotificationResponse, ToolCallSummary, UpdateIpNotificationSettingsRequest,
 };
 use soloops_storage::{AuditEntry, AuthenticatedOwner, Database, StorageError, now_ms};
 use tokio::sync::Mutex;
@@ -50,6 +50,7 @@ mod auth;
 mod config;
 mod error;
 mod notifications;
+mod ssh_access;
 mod telemetry;
 
 pub use auth::SESSION_COOKIE;
@@ -112,6 +113,7 @@ pub fn build_router_and_notifications(
             get(get_ip_notification_settings).put(update_ip_notification_settings),
         )
         .route("/api/settings/ip-notifications/test", post(test_ip_notifications))
+        .route("/api/settings/ssh-access", get(get_ssh_access))
         .layer(middleware::from_fn_with_state(state.clone(), observe_request))
         .layer(middleware::from_fn_with_state(state.clone(), enforce_origin))
         .layer(PropagateRequestIdLayer::new(HeaderName::from_static(
@@ -250,6 +252,18 @@ async fn test_ip_notifications(
         StatusCode::BAD_GATEWAY
     };
     Ok((status, Json(response)))
+}
+
+async fn get_ssh_access(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> Result<Json<SshAccessReport>, AppError> {
+    require_owner(&state, &jar).await?;
+    // Filesystem scans stay off the async runtime.
+    let report = tokio::task::spawn_blocking(ssh_access::scan_ssh_access)
+        .await
+        .map_err(|error| AppError::internal(format!("ssh access scan failed: {error}")))?;
+    Ok(Json(report))
 }
 
 fn normalize_recipients(recipients: Vec<String>) -> Result<Vec<String>, AppError> {
