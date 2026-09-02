@@ -1,7 +1,7 @@
 //! Managed deployment revision, lease, and operation tests.
 
-use super::common::*;
 use super::super::*;
+use super::common::*;
 use crate::{NewManagedDeploymentRevision, NewToolCall, PersistModelResponse};
 use sha2::Digest;
 use soloops_domain::{PolicyDecision, ToolRisk, UsageSnapshot};

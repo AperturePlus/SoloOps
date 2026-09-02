@@ -1,8 +1,9 @@
-//! Core runtime loop tests: no-progress blocking, cancellation, and retry keys.
+//! Core runtime loop tests: no-progress blocking, cancellation, retry keys, and
+//! defenses against truncated assistant messages.
 
-use super::providers::{CancellingProvider, FakeProvider, RetryingProvider};
+use super::providers::{CancellingProvider, FakeProvider, LengthTruncatedProvider, RetryingProvider};
 use crate::{ModelResponse, RuntimeConfig, RuntimeEngine, SecretRef};
-use soloops_domain::{BudgetSnapshot, CreateTaskRequest, RunStatus, UsageSnapshot};
+use soloops_domain::{BudgetSnapshot, CreateTaskRequest, RunStatus, ToolCallStatus, UsageSnapshot};
 use soloops_storage::Database;
 use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
@@ -170,4 +171,57 @@ async fn retries_reuse_the_logical_turn_key_but_use_unique_attempt_keys() {
             .status,
         RunStatus::Blocked
     );
+}
+
+#[tokio::test]
+async fn length_truncated_tool_calls_fail_without_execution() {
+    let database = Database::connect(":memory:").await.unwrap();
+    database.migrate().await.unwrap();
+    let owner = database.create_owner("owner", "hash").await.unwrap();
+    let task = database
+        .create_task_with_run(
+            &owner.id,
+            &CreateTaskRequest {
+                title: "Truncated".into(),
+                goal: "Discard salvaged tool calls".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let config = RuntimeConfig {
+        model_base_url: "http://unused".into(),
+        model_name: "fake".into(),
+        model_api_key_ref: SecretRef::Env("UNUSED".into()),
+        prompt_cache_key_enabled: false,
+        workspace_root: temp.path().join("workspaces"),
+        artifact_root: temp.path().join("artifacts"),
+        hostd_socket: None,
+        sandbox_enabled: false,
+        managed_deploy_enabled: false,
+        budget: BudgetSnapshot::default(),
+        lease_ms: 30_000,
+        lease_renew_ms: 10_000,
+    };
+    let engine = RuntimeEngine::new(database.clone(), Arc::new(LengthTruncatedProvider), config).unwrap();
+    engine.run_once("worker").await.unwrap();
+
+    // Three consecutive truncated turns count as no progress and block the run.
+    let run = database.get_run(&task.latest_run_id).await.unwrap().unwrap();
+    assert_eq!(run.status, RunStatus::Blocked);
+    let snapshot = database
+        .runtime_snapshot(&task.latest_run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot.tool_calls.len(), 3);
+    for call in &snapshot.tool_calls {
+        assert_eq!(call.status, ToolCallStatus::Failed);
+        assert_eq!(call.error_category.as_deref(), Some("truncated_response"));
+        assert!(call.result_summary.is_some());
+    }
+    // Each discarded call left a model-visible error result in the journal.
+    let items = database.load_agent_items(&task.latest_run_id, 30).await.unwrap();
+    let failed_results = items.iter().filter(|item| item.kind == "tool_result").count();
+    assert_eq!(failed_results, 3);
 }

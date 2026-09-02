@@ -3,7 +3,9 @@
 use super::providers::{FakeHostExecutor, FakeProvider, ManagedRecoveryProvider, SlowManagedExecutor};
 use crate::{ModelResponse, ModelToolCall, RuntimeConfig, RuntimeEngine, SecretRef};
 use serde_json::json;
-use soloops_domain::{AgentPlan, BudgetSnapshot, CreateTaskRequest, RunStatus, ToolCallStatus, UsageSnapshot};
+use soloops_domain::{
+    AgentPlan, BudgetSnapshot, CreateTaskRequest, RunStatus, ToolCallStatus, UsageSnapshot,
+};
 use soloops_storage::{
     Database, NewManagedDeploymentRevision, NewToolCall, PersistModelResponse, RuntimeSessionConfig,
 };

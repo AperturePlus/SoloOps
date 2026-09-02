@@ -848,7 +848,9 @@ impl Database {
                 call_id: call_id.to_owned(),
             });
         }
-        let evidence_id = evidence.map(|_| Uuid::new_v4().to_string());
+        // Derive the evidence row and its id from the same source of truth so the
+        // journal payload and the evidence insert can never disagree.
+        let evidence_row = evidence.map(|evidence| (Uuid::new_v4().to_string(), evidence));
         let sequence: i64 =
             sqlx::query_scalar("SELECT COALESCE(MAX(sequence), 0) + 1 FROM agent_items WHERE run_id = ?")
                 .bind(run_id)
@@ -861,17 +863,20 @@ impl Database {
         .bind(Uuid::new_v4().to_string())
         .bind(run_id)
         .bind(sequence)
-        .bind(json!({"callId": call_id, "result": result, "evidenceId": evidence_id}).to_string())
+        .bind(
+            json!({"callId": call_id, "result": result, "evidenceId": evidence_row.as_ref().map(|(id, _)| id)})
+                .to_string(),
+        )
         .bind(now)
         .execute(&mut *transaction)
         .await?;
-        if let Some(evidence) = evidence {
+        if let Some((evidence_id, evidence)) = evidence_row {
             sqlx::query(
                 "INSERT INTO evidence
                  (id, run_id, tool_call_id, kind, summary, artifact_ref, content_sha256, workspace_revision, created_at)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
-            .bind(evidence_id.as_ref().expect("evidence ID exists"))
+            .bind(evidence_id)
             .bind(run_id)
             .bind(call_id)
             .bind(&evidence.kind)
@@ -1058,14 +1063,16 @@ impl Database {
             return Ok(None);
         };
         let row = sqlx::query(
-            "SELECT workspace_path, artifact_path, consecutive_no_progress, consecutive_protocol_errors, created_at
+            "SELECT workspace_path, artifact_path, consecutive_no_progress, consecutive_protocol_errors
              FROM agent_sessions WHERE run_id = ?",
         )
         .bind(run_id)
         .fetch_one(&mut *transaction)
         .await?;
-        let created_at: i64 = row.get("created_at");
-        snapshot.usage.elapsed_ms = now_ms().saturating_sub(created_at) as u64;
+        // Budget enforcement must observe active execution time only: time spent
+        // waiting for Owner approval or in model retry backoff is not execution and
+        // must not push a run over max_duration_ms.
+        snapshot.usage.elapsed_ms = active_execution_ms_on_connection(&mut transaction, run_id).await?;
         let state = RuntimeExecutionState {
             snapshot,
             workspace_path: row.get("workspace_path"),
@@ -1234,6 +1241,36 @@ impl Database {
         }
         Ok(count)
     }
+}
+
+/// Accumulated wall-clock time the run has spent actively executing: the union of
+/// model-attempt windows and tool-call windows. Queued time, Owner approval waits and
+/// model retry backoff contribute nothing, because those rows either never started
+/// (`started_at IS NULL`) or carry no in-flight window.
+async fn active_execution_ms_on_connection(
+    connection: &mut sqlx::SqliteConnection,
+    run_id: &str,
+) -> Result<u64, StorageError> {
+    let now = now_ms();
+    let tool_ms: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(MIN(COALESCE(completed_at, ?), ?) - started_at), 0)
+         FROM tool_calls WHERE run_id = ? AND started_at IS NOT NULL",
+    )
+    .bind(now)
+    .bind(now)
+    .bind(run_id)
+    .fetch_one(&mut *connection)
+    .await?;
+    let model_ms: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(MIN(COALESCE(completed_at, ?), ?) - started_at), 0)
+         FROM model_attempts WHERE run_id = ? AND started_at IS NOT NULL",
+    )
+    .bind(now)
+    .bind(now)
+    .bind(run_id)
+    .fetch_one(&mut *connection)
+    .await?;
+    Ok(tool_ms.saturating_add(model_ms).max(0) as u64)
 }
 
 async fn runtime_snapshot_on_connection(

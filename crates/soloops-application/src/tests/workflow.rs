@@ -1,6 +1,8 @@
 //! Approval + workspace/process/sandbox execution flow tests.
 
-use super::providers::{FakeHostExecutor, ProcessWorkflowProvider, SandboxWorkflowProvider, WorkflowProvider};
+use super::providers::{
+    FakeHostExecutor, ProcessWorkflowProvider, SandboxWorkflowProvider, WorkflowProvider,
+};
 use crate::{RuntimeConfig, RuntimeEngine, SecretRef};
 use soloops_domain::{BudgetSnapshot, CreateTaskRequest, RunStatus, ToolCallStatus};
 use soloops_storage::Database;

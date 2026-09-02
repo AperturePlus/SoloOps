@@ -1,7 +1,7 @@
 //! Owner/session/audit and host tool authorization tests.
 
-use super::common::*;
 use super::super::*;
+use super::common::*;
 use crate::{NewToolCall, PersistModelResponse};
 use sha2::Digest;
 use soloops_domain::{PolicyDecision, ToolRisk, UsageSnapshot};

@@ -14,9 +14,8 @@ use std::{
 };
 
 use crate::{
-    HostExecutor, HostManagedDeployOutput, HostProcessOutput, HostSandboxOutput, ModelProvider,
-    ModelRequest, ModelResponse, ModelToolCall, ProviderError, ProviderErrorCategory, ToolContext,
-    ToolError,
+    HostExecutor, HostManagedDeployOutput, HostProcessOutput, HostSandboxOutput, ModelProvider, ModelRequest,
+    ModelResponse, ModelToolCall, ProviderError, ProviderErrorCategory, ToolContext, ToolError,
 };
 
 pub struct FakeProvider {
@@ -137,6 +136,31 @@ pub struct ReplaceWorkflowProvider {
 pub struct CancellingProvider {
     pub database: Database,
     pub owner_id: String,
+}
+
+pub struct LengthTruncatedProvider;
+
+#[async_trait]
+impl ModelProvider for LengthTruncatedProvider {
+    /// Always replies with a batch of tool calls whose message was cut off by the
+    /// output token limit: stop_reason=length.
+    async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse, ProviderError> {
+        Ok(ModelResponse {
+            assistant_message: Some("partial thoughts".into()),
+            tool_calls: vec![ModelToolCall {
+                call_id: format!("truncated-{}", uuid::Uuid::new_v4()),
+                name: "workspace.list".into(),
+                arguments: json!({"path": "."}),
+            }],
+            usage: UsageSnapshot {
+                model_turns: 1,
+                output_tokens: 50,
+                ..UsageSnapshot::default()
+            },
+            stop_reason: Some("length".into()),
+            provider_request_id: None,
+        })
+    }
 }
 
 pub struct RetryingProvider {

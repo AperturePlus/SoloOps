@@ -291,7 +291,6 @@ impl RuntimeEngine {
             tools: self.registry.descriptors(),
             remaining_budget: remaining_budget(budget, current_usage),
         };
-        let started_at = self.clock.now_ms();
         let response = match self.provider.complete(request).await {
             Ok(response) => response,
             Err(error) => {
@@ -355,9 +354,8 @@ impl RuntimeEngine {
             .cache_write_input_tokens
             .saturating_add(response.usage.cache_write_input_tokens);
         usage.tool_calls = usage.tool_calls.saturating_add(response.tool_calls.len() as u32);
-        usage.elapsed_ms = usage
-            .elapsed_ms
-            .saturating_add(self.clock.now_ms().saturating_sub(started_at) as u64);
+        // `elapsed_ms` stays the active-execution time observed on the state read;
+        // the storage layer recomputes it from model-attempt and tool-call windows.
         let mut items = vec![NewAgentItem {
             kind: "model_response".to_owned(),
             payload: json!({"stopReason": response.stop_reason, "toolCallIds": response.tool_calls.iter().map(|call| &call.call_id).collect::<Vec<_>>() }),
@@ -391,7 +389,17 @@ impl RuntimeEngine {
                 }
             })
             .collect::<Vec<_>>();
-        let made_progress = !calls.is_empty();
+        // Defense against stop_reason=length: a truncated assistant message can carry
+        // salvaged tool call arguments that pass JSON validation but are incomplete.
+        // Never execute them; fail the whole batch as model-visible errors so the next
+        // turn re-emits the calls. Three consecutive truncated turns count as no
+        // progress and let the run block instead of burning the budget.
+        let truncated_by_length = !calls.is_empty()
+            && response
+                .stop_reason
+                .as_deref()
+                .is_some_and(|reason| reason.eq_ignore_ascii_case("length"));
+        let made_progress = !calls.is_empty() && !truncated_by_length;
         self.database
             .persist_model_response(
                 run_id,
@@ -405,6 +413,20 @@ impl RuntimeEngine {
                 },
             )
             .await?;
+        if truncated_by_length {
+            for call in &calls {
+                self.database
+                    .fail_tool_call_before_start(
+                        run_id,
+                        &call.call_id,
+                        "truncated_response",
+                        "The assistant message was truncated by the output token limit \
+                         (stop_reason=length); its tool calls were discarded without execution. \
+                         Re-issue the tool calls.",
+                    )
+                    .await?;
+            }
+        }
         Ok(false)
     }
 }

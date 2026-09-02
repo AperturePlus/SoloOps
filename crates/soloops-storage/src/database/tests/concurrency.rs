@@ -1,7 +1,7 @@
 //! Concurrency and lock-behavior tests for idle claims and approvals.
 
-use super::common::*;
 use super::super::*;
+use super::common::*;
 use crate::{NewToolCall, PersistModelResponse};
 use soloops_domain::{PolicyDecision, ToolRisk, UsageSnapshot};
 

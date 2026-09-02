@@ -1,10 +1,7 @@
 //! Interrupted workspace create/replace recovery tests.
 
 use super::providers::{ReplaceWorkflowProvider, WorkflowProvider};
-use crate::{
-    RuntimeConfig, RuntimeEngine, SecretRef,
-    tools::prepare_workspace_write,
-};
+use crate::{RuntimeConfig, RuntimeEngine, SecretRef, tools::prepare_workspace_write};
 use soloops_domain::{BudgetSnapshot, CreateTaskRequest, RunStatus};
 use soloops_storage::Database;
 use std::{

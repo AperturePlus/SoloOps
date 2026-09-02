@@ -1,7 +1,7 @@
 //! Schema adoption and migration tests.
 
-use super::common::*;
 use super::super::*;
+use super::common::*;
 
 #[tokio::test]
 async fn adopts_the_typescript_baseline_schema() {

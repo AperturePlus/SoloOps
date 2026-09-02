@@ -1,8 +1,39 @@
 //! Task/run/event/retry/tool-call persistence tests.
 
-use super::common::*;
 use super::super::*;
-use crate::NewEvidence;
+use super::common::*;
+use crate::{NewEvidence, NewToolCall, PersistModelResponse};
+use soloops_domain::{PolicyDecision, ToolRisk, UsageSnapshot};
+
+/// Like `common::insert_read_only_tool_call` but parameterized by turn, so several
+/// calls can coexist without tripping the (run, request_key, attempt) unique index.
+async fn insert_read_only_call_at_turn(database: &Database, run_id: &str, call_id: &str, turn: i64) {
+    let attempt_id = database
+        .prepare_model_attempt(run_id, &format!("{run_id}:turn:{turn}"), 1)
+        .await
+        .unwrap();
+    database
+        .persist_model_response(
+            run_id,
+            PersistModelResponse {
+                attempt_id: &attempt_id,
+                provider_request_id: None,
+                items: &[],
+                calls: &[NewToolCall {
+                    call_id: call_id.to_owned(),
+                    ordinal: 0,
+                    name: "workspace.search".into(),
+                    arguments: json!({"path": ".", "query": "needle"}),
+                    risk: ToolRisk::ReadOnly,
+                    policy: PolicyDecision::Allow,
+                }],
+                usage: &UsageSnapshot::default(),
+                made_progress: true,
+            },
+        )
+        .await
+        .unwrap();
+}
 
 #[tokio::test]
 async fn creates_a_task_and_ordered_event_stream() {
@@ -221,4 +252,82 @@ async fn tool_call_completion_is_compare_and_set() {
         .filter(|event| event.event_type == EventType::ToolCallCompleted)
         .count();
     assert_eq!(completion_events, 1);
+}
+
+#[tokio::test]
+async fn elapsed_ms_counts_active_execution_time_and_excludes_waiting() {
+    let database = database().await;
+    let (_owner, task) = initialized_runtime(&database).await;
+    let run_id = &task.latest_run_id;
+
+    // Pretend the session was created an hour ago. Under the old "now - created_at"
+    // semantics this alone would push the run over max_duration_ms.
+    sqlx::query("UPDATE agent_sessions SET created_at = created_at - 3_600_000 WHERE run_id = ?")
+        .bind(run_id)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    let state = database.runtime_execution_state(run_id).await.unwrap().unwrap();
+    assert!(
+        state.snapshot.usage.elapsed_ms < 60_000,
+        "waiting time must not count as execution, got {}",
+        state.snapshot.usage.elapsed_ms
+    );
+
+    // A completed model attempt contributes its real call window.
+    let attempt_id = database
+        .prepare_model_attempt(run_id, &format!("{run_id}:turn:1"), 1)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE model_attempts SET started_at = started_at - 2500 WHERE id = ?")
+        .bind(&attempt_id)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    database
+        .persist_model_response(
+            run_id,
+            PersistModelResponse {
+                attempt_id: &attempt_id,
+                provider_request_id: None,
+                items: &[],
+                calls: &[],
+                usage: &UsageSnapshot::default(),
+                made_progress: true,
+            },
+        )
+        .await
+        .unwrap();
+
+    // A completed read-only tool call contributes its execution window as well.
+    insert_read_only_call_at_turn(&database, run_id, "call-active", 2).await;
+    database.start_tool_call(run_id, "call-active").await.unwrap();
+    sqlx::query("UPDATE tool_calls SET started_at = started_at - 4000 WHERE call_id = ?")
+        .bind("call-active")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    database
+        .finish_tool_call(run_id, "call-active", &json!({"ok": true}), "done", None, false)
+        .await
+        .unwrap();
+
+    // A tool call still waiting for Owner approval contributes nothing.
+    insert_read_only_call_at_turn(&database, run_id, "call-waiting", 3).await;
+    database
+        .wait_for_tool_approval(run_id, "call-waiting")
+        .await
+        .unwrap();
+
+    let state = database.runtime_execution_state(run_id).await.unwrap().unwrap();
+    assert!(
+        state.snapshot.usage.elapsed_ms >= 6_000,
+        "2.5s model + 4s tool windows must be counted, got {}",
+        state.snapshot.usage.elapsed_ms
+    );
+    assert!(
+        state.snapshot.usage.elapsed_ms < 3_600_000,
+        "the hour of fake queue time must stay excluded, got {}",
+        state.snapshot.usage.elapsed_ms
+    );
 }
