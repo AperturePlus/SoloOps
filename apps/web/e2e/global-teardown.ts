@@ -3,7 +3,7 @@ export default async function globalTeardown() {
   try {
     const response = await fetch("http://127.0.0.1:4173/__e2e/shutdown", {
       method: "POST",
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(15_000)
     });
     if (!response.ok) throw new Error(`E2E harness shutdown returned HTTP ${response.status}`);
     const status = (await response.json()) as { ok: boolean; errors: string[] };
