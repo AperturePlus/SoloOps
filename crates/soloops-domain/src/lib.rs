@@ -8,8 +8,10 @@ mod security;
 pub use error::{ApiErrorBody, ApiErrorResponse, ValidationError};
 pub use event::{EventEnvelope, EventType, ParseEventTypeError};
 pub use requests::{
-    CreateTaskRequest, IpNotificationRecipientStatus, IpNotificationSettings, LoginRequest, Owner,
-    SessionResponse, TestIpNotificationResponse, UpdateIpNotificationSettingsRequest,
+    CreateTaskRequest, IpNotificationRecipientStatus, IpNotificationSettings, LoginRequest, ModelSettings,
+    Owner, SessionResponse, SmtpSettings, TestIpNotificationResponse, TestModelSettingsResponse,
+    TestSmtpDeliveryRequest, TestSmtpDeliveryResponse, UpdateIpNotificationSettingsRequest,
+    UpdateModelSettingsRequest, UpdateSmtpSettingsRequest,
 };
 pub use run::{ParseRunStatusError, RUN_STATUSES, RunStatus};
 pub use runtime::{
