@@ -102,6 +102,8 @@ impl SecretResolver for EnvironmentSecretResolver {
 
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
+    /// Environment bootstrap values; the worker overlays the owner-managed
+    /// database settings before building its engine (see `model_settings`).
     pub model_base_url: String,
     pub model_name: String,
     pub model_api_key_ref: SecretRef,
@@ -118,14 +120,7 @@ pub struct RuntimeConfig {
 
 impl RuntimeConfig {
     pub fn load() -> Result<Self> {
-        let model_name = required_env("SOLOOPS_MODEL_NAME")?;
-        let primary_key_ref = std::env::var("SOLOOPS_MODEL_API_KEY_REF").ok();
-        let legacy_key_env = std::env::var("SOLOOPS_MODEL_API_KEY_ENV").ok();
-        let (model_api_key_ref, used_legacy_key_env) =
-            model_api_key_ref(primary_key_ref.as_deref(), legacy_key_env.as_deref())?;
-        if used_legacy_key_env {
-            eprintln!("SOLOOPS_MODEL_API_KEY_ENV is deprecated; use SOLOOPS_MODEL_API_KEY_REF=env:<name>");
-        }
+        let env_model = crate::model_settings::EnvModelConfig::from_environment()?;
         let old_allowlist_is_configured =
             std::env::var("SOLOOPS_PROCESS_ALLOWLIST_JSON")
                 .ok()
@@ -177,9 +172,9 @@ impl RuntimeConfig {
             anyhow::bail!("SOLOOPS_WORKER_LEASE_RENEW_MS must be less than SOLOOPS_WORKER_LEASE_MS");
         }
         Ok(Self {
-            model_base_url: env("SOLOOPS_MODEL_BASE_URL", "https://api.openai.com/v1"),
-            model_name,
-            model_api_key_ref,
+            model_base_url: env_model.base_url,
+            model_name: env_model.model_name,
+            model_api_key_ref: env_model.api_key_ref,
             prompt_cache_key_enabled: parse_bool(&env("SOLOOPS_PROMPT_CACHE_KEY_ENABLED", "false"))?,
             workspace_root: absolute(&current, &env("SOLOOPS_WORKSPACE_ROOT", "var/workspaces")),
             artifact_root: absolute(&current, &env("SOLOOPS_ARTIFACT_ROOT", "var/artifacts")),
@@ -195,23 +190,15 @@ impl RuntimeConfig {
     pub fn api_key(&self, resolver: &dyn SecretResolver) -> Result<SecretValue> {
         resolver.resolve(&self.model_api_key_ref)
     }
-}
 
-fn model_api_key_ref(primary: Option<&str>, legacy: Option<&str>) -> Result<(SecretRef, bool)> {
-    if let Some(value) = primary {
-        return Ok((
-            value.parse().context("SOLOOPS_MODEL_API_KEY_REF is invalid")?,
-            false,
-        ));
+    /// The environment model bootstrap as used by the settings resolver.
+    pub fn model_env(&self) -> crate::model_settings::EnvModelConfig {
+        crate::model_settings::EnvModelConfig {
+            base_url: self.model_base_url.clone(),
+            model_name: self.model_name.clone(),
+            api_key_ref: self.model_api_key_ref.clone(),
+        }
     }
-    let used_legacy = legacy.is_some();
-    let legacy = legacy.unwrap_or("OPENAI_API_KEY");
-    Ok((
-        format!("env:{legacy}")
-            .parse()
-            .context("SOLOOPS_MODEL_API_KEY_ENV is invalid")?,
-        used_legacy,
-    ))
 }
 
 fn parse_bool(value: &str) -> Result<bool> {
@@ -233,14 +220,6 @@ fn absolute(current: &std::path::Path, value: &str) -> PathBuf {
 
 fn env(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_owned())
-}
-
-fn required_env(name: &str) -> Result<String> {
-    let value = std::env::var(name).with_context(|| format!("{name} is required"))?;
-    if value.trim().is_empty() {
-        anyhow::bail!("{name} must not be empty");
-    }
-    Ok(value)
 }
 
 fn parsed<T>(name: &str, default: T, minimum: T, maximum: T) -> Result<T>
@@ -288,18 +267,6 @@ mod tests {
         assert!(!rendered.contains("VERY_PRIVATE"));
         assert!(!rendered.contains("super-secret"));
         assert_eq!(value.expose_secret(), "super-secret");
-    }
-
-    #[test]
-    fn legacy_model_key_environment_is_compatible_for_one_phase() {
-        let (reference, used_legacy) = model_api_key_ref(None, Some("LEGACY_API_KEY")).unwrap();
-        assert_eq!(reference, SecretRef::Env("LEGACY_API_KEY".into()));
-        assert!(used_legacy);
-
-        let (reference, used_legacy) =
-            model_api_key_ref(Some("env:NEW_API_KEY"), Some("LEGACY_API_KEY")).unwrap();
-        assert_eq!(reference, SecretRef::Env("NEW_API_KEY".into()));
-        assert!(!used_legacy);
     }
 
     #[test]

@@ -2,6 +2,7 @@ mod config;
 mod engine;
 mod hostd;
 mod model;
+mod model_settings;
 mod tools;
 
 pub use config::{
@@ -12,6 +13,10 @@ pub use hostd::{HostExecutor, HostManagedDeployOutput, HostProcessOutput, HostSa
 pub use model::{
     ChatCompletionsProvider, ModelProvider, ModelRequest, ModelResponse, ModelToolCall, ProviderError,
     ProviderErrorCategory,
+};
+pub use model_settings::{
+    EffectiveModelSettings, EnvModelConfig, ModelSettingsSnapshot, model_settings_snapshot,
+    resolve_env_model_settings, resolve_model_settings,
 };
 pub use tools::{Tool, ToolContext, ToolDescriptor, ToolError, ToolOutput, ToolRegistry};
 
