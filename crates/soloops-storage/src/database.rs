@@ -20,6 +20,9 @@ const WORKSPACE_WRITE_RECOVERY_SQL: &str = include_str!("../migrations/0003_work
 const IP_NOTIFICATIONS_SQL: &str = include_str!("../migrations/0004_ip_notifications.sql");
 const MANAGED_DEPLOYMENTS_SQL: &str = include_str!("../migrations/0005_managed_deployments.sql");
 const MANAGED_DEPLOYMENT_LEASES_SQL: &str = include_str!("../migrations/0006_managed_deployment_leases.sql");
+const PASSWORD_ROTATION_SQL: &str = include_str!("../migrations/0007_password_rotation.sql");
+const SMTP_SETTINGS_SQL: &str = include_str!("../migrations/0008_smtp_settings.sql");
+const MODEL_SETTINGS_SQL: &str = include_str!("../migrations/0009_model_settings.sql");
 const REQUIRED_TABLES: &[&str] = &[
     "users",
     "sessions",
@@ -38,6 +41,9 @@ const REQUIRED_TABLES: &[&str] = &[
     "managed_deployments",
     "managed_deployment_revisions",
     "managed_deployment_operations",
+    "password_rotation_state",
+    "smtp_settings",
+    "model_settings",
 ];
 const REQUIRED_COLUMNS: &[(&str, &[&str])] = &[
     ("users", &["id", "username", "password_hash", "created_at"]),
@@ -258,6 +264,33 @@ const REQUIRED_COLUMNS: &[(&str, &[&str])] = &[
             "finished_at",
         ],
     ),
+    (
+        "password_rotation_state",
+        &[
+            "owner_id",
+            "last_rotated_at",
+            "last_email_at",
+            "last_email_error",
+            "updated_at",
+        ],
+    ),
+    (
+        "smtp_settings",
+        &[
+            "owner_id",
+            "host",
+            "port",
+            "security",
+            "from_mailbox",
+            "username",
+            "password",
+            "updated_at",
+        ],
+    ),
+    (
+        "model_settings",
+        &["owner_id", "base_url", "model_name", "api_key", "updated_at"],
+    ),
 ];
 
 #[derive(Clone)]
@@ -308,6 +341,40 @@ pub struct IpNotificationRecipientRecord {
     pub last_error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordRotationRecord {
+    pub owner_id: String,
+    pub last_rotated_at: Option<i64>,
+    pub last_email_at: Option<i64>,
+    pub last_email_error: Option<String>,
+}
+
+/// Owner-managed SMTP transport saved from the WebUI. The password is stored
+/// server-side and must never be returned over the API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmtpSettingsRecord {
+    pub owner_id: String,
+    pub host: String,
+    pub port: i64,
+    pub security: String,
+    pub from_mailbox: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub updated_at: i64,
+}
+
+/// Owner-managed LLM API settings saved from the WebUI. The API key is stored
+/// server-side and must never be returned over the API; an absent key marks an
+/// endpoint that authenticates nothing (local inference servers).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelSettingsRecord {
+    pub owner_id: String,
+    pub base_url: String,
+    pub model_name: String,
+    pub api_key: Option<String>,
+    pub updated_at: i64,
+}
+
 #[derive(Debug, Error)]
 pub enum StorageError {
     #[error(transparent)]
@@ -339,6 +406,10 @@ pub enum StorageError {
     OwnerAlreadyExists,
     #[error("owner username is required")]
     InvalidOwnerUsername,
+    #[error("user was not found: {0}")]
+    UserNotFound(String),
+    #[error("invalid smtp security stored in database: {0}")]
+    InvalidSmtpSecurity(String),
     #[error("invalid runtime JSON in {field}: {source}")]
     InvalidRuntimeJson {
         field: &'static str,
@@ -397,6 +468,7 @@ pub fn now_ms() -> i64 {
 mod auth;
 mod notifications;
 mod schema;
+mod settings;
 mod tasks;
 
 pub(crate) use tasks::{insert_audit_on_connection, insert_event, transition_run_on_connection};

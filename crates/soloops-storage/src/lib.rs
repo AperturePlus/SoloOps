@@ -4,7 +4,7 @@ mod runtime;
 
 pub use database::{
     AuditEntry, AuthenticatedOwner, Database, IpNotificationRecipientRecord, IpNotificationRecord,
-    StorageError, UserRecord, now_ms,
+    ModelSettingsRecord, PasswordRotationRecord, SmtpSettingsRecord, StorageError, UserRecord, now_ms,
 };
 pub use deployment::*;
 pub use runtime::*;

@@ -46,6 +46,137 @@ impl Database {
         }))
     }
 
+    pub async fn find_first_owner(&self) -> Result<Option<UserRecord>, StorageError> {
+        let row = sqlx::query("SELECT id, username, password_hash FROM users ORDER BY created_at LIMIT 1")
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|row| UserRecord {
+            id: row.get("id"),
+            username: row.get("username"),
+            password_hash: row.get("password_hash"),
+        }))
+    }
+
+    /// Replaces the owner password hash, revokes every active session for the
+    /// user, and writes an audit entry in one transaction.
+    pub async fn replace_owner_password(
+        &self,
+        user_id: &str,
+        password_hash: &str,
+        actor_type: &'static str,
+        action: &'static str,
+    ) -> Result<(), StorageError> {
+        let now = now_ms();
+        let mut transaction = self.pool.begin().await?;
+        let updated = sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+            .bind(password_hash)
+            .bind(user_id)
+            .execute(&mut *transaction)
+            .await?;
+        if updated.rows_affected() == 0 {
+            return Err(StorageError::UserNotFound(user_id.to_owned()));
+        }
+        let revoked =
+            sqlx::query("UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL")
+                .bind(now)
+                .bind(user_id)
+                .execute(&mut *transaction)
+                .await?;
+        insert_audit_on_connection(
+            &mut transaction,
+            AuditEntry {
+                actor_type,
+                actor_id: Some(user_id.to_owned()),
+                action,
+                object_type: Some("user"),
+                object_id: Some(user_id.to_owned()),
+                outcome: "success",
+                context: json!({ "sessionsRevoked": revoked.rows_affected() }),
+            },
+            now,
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    pub async fn get_password_rotation_state(
+        &self,
+        owner_id: &str,
+    ) -> Result<PasswordRotationRecord, StorageError> {
+        let row = sqlx::query(
+            "SELECT last_rotated_at, last_email_at, last_email_error
+             FROM password_rotation_state WHERE owner_id = ?",
+        )
+        .bind(owner_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(match row {
+            Some(row) => PasswordRotationRecord {
+                owner_id: owner_id.to_owned(),
+                last_rotated_at: row.get("last_rotated_at"),
+                last_email_at: row.get("last_email_at"),
+                last_email_error: row.get("last_email_error"),
+            },
+            None => PasswordRotationRecord {
+                owner_id: owner_id.to_owned(),
+                last_rotated_at: None,
+                last_email_at: None,
+                last_email_error: None,
+            },
+        })
+    }
+
+    pub async fn record_password_rotation_success(
+        &self,
+        owner_id: &str,
+        rotated_at: i64,
+    ) -> Result<(), StorageError> {
+        let now = now_ms();
+        sqlx::query(
+            "INSERT INTO password_rotation_state
+                 (owner_id, last_rotated_at, last_email_at, last_email_error, updated_at)
+             VALUES (?, ?, ?, NULL, ?)
+             ON CONFLICT(owner_id) DO UPDATE SET
+                 last_rotated_at = excluded.last_rotated_at,
+                 last_email_at = excluded.last_email_at,
+                 last_email_error = NULL,
+                 updated_at = excluded.updated_at",
+        )
+        .bind(owner_id)
+        .bind(rotated_at)
+        .bind(rotated_at)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn record_password_rotation_failure(
+        &self,
+        owner_id: &str,
+        attempted_at: i64,
+        error: &str,
+    ) -> Result<(), StorageError> {
+        let now = now_ms();
+        sqlx::query(
+            "INSERT INTO password_rotation_state
+                 (owner_id, last_rotated_at, last_email_at, last_email_error, updated_at)
+             VALUES (?, NULL, ?, ?, ?)
+             ON CONFLICT(owner_id) DO UPDATE SET
+                 last_email_at = excluded.last_email_at,
+                 last_email_error = excluded.last_email_error,
+                 updated_at = excluded.updated_at",
+        )
+        .bind(owner_id)
+        .bind(attempted_at)
+        .bind(error)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn create_session_with_audit(
         &self,
         user_id: &str,

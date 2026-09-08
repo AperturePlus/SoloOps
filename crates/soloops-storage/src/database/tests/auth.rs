@@ -226,3 +226,194 @@ async fn rejects_and_cleans_expired_or_revoked_sessions() {
         .unwrap();
     assert_eq!(session_count, 1);
 }
+#[tokio::test]
+async fn replacing_owner_password_updates_hash_revokes_sessions_and_audits() {
+    let database = database().await;
+    let owner = database.create_owner("owner", "old-hash").await.unwrap();
+    database
+        .create_session_with_audit(&owner.id, "token-a", now_ms() + 60_000, json!({}))
+        .await
+        .unwrap();
+    database
+        .create_session_with_audit(&owner.id, "token-b", now_ms() + 60_000, json!({}))
+        .await
+        .unwrap();
+    let audit_before = database.audit_count().await.unwrap();
+
+    database
+        .replace_owner_password(&owner.id, "new-hash", "system", "auth.password_rotated")
+        .await
+        .unwrap();
+
+    let user = database.find_first_owner().await.unwrap().unwrap();
+    assert_eq!(user.id, owner.id);
+    assert_eq!(user.password_hash, "new-hash");
+    assert!(database.find_session_owner("token-a").await.unwrap().is_none());
+    assert!(database.find_session_owner("token-b").await.unwrap().is_none());
+    assert_eq!(database.audit_count().await.unwrap(), audit_before + 1);
+    let audit_row =
+        sqlx::query("SELECT action, actor_type, outcome FROM audit_logs ORDER BY sequence DESC LIMIT 1")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(audit_row.get::<String, _>("action"), "auth.password_rotated");
+    assert_eq!(audit_row.get::<String, _>("actor_type"), "system");
+    assert_eq!(audit_row.get::<String, _>("outcome"), "success");
+
+    let error = database
+        .replace_owner_password("missing-user", "new-hash", "system", "auth.password_rotated")
+        .await
+        .unwrap_err();
+    assert!(matches!(error, StorageError::UserNotFound(user) if user == "missing-user"));
+}
+#[tokio::test]
+async fn password_rotation_state_upserts_success_and_failure() {
+    let database = database().await;
+    let owner = database.create_owner("owner", "hash").await.unwrap();
+
+    let initial = database.get_password_rotation_state(&owner.id).await.unwrap();
+    assert_eq!(
+        initial,
+        PasswordRotationRecord {
+            owner_id: owner.id.clone(),
+            last_rotated_at: None,
+            last_email_at: None,
+            last_email_error: None,
+        }
+    );
+
+    database
+        .record_password_rotation_failure(&owner.id, 1_000, "smtp_send_failed")
+        .await
+        .unwrap();
+    let failed = database.get_password_rotation_state(&owner.id).await.unwrap();
+    assert_eq!(failed.last_rotated_at, None);
+    assert_eq!(failed.last_email_at, Some(1_000));
+    assert_eq!(failed.last_email_error.as_deref(), Some("smtp_send_failed"));
+
+    database
+        .record_password_rotation_success(&owner.id, 2_000)
+        .await
+        .unwrap();
+    let succeeded = database.get_password_rotation_state(&owner.id).await.unwrap();
+    assert_eq!(succeeded.last_rotated_at, Some(2_000));
+    assert_eq!(succeeded.last_email_at, Some(2_000));
+    assert_eq!(succeeded.last_email_error, None);
+
+    database
+        .record_password_rotation_failure(&owner.id, 3_000, "smtp_send_failed")
+        .await
+        .unwrap();
+    let failed_again = database.get_password_rotation_state(&owner.id).await.unwrap();
+    assert_eq!(failed_again.last_rotated_at, Some(2_000));
+    assert_eq!(failed_again.last_email_at, Some(3_000));
+    assert_eq!(failed_again.last_email_error.as_deref(), Some("smtp_send_failed"));
+}
+#[tokio::test]
+async fn smtp_settings_roundtrip_delete_and_audit_exclude_the_password() {
+    let database = database().await;
+    let owner = database.create_owner("owner", "hash").await.unwrap();
+    assert!(database.get_smtp_settings(&owner.id).await.unwrap().is_none());
+
+    let record = SmtpSettingsRecord {
+        owner_id: owner.id.clone(),
+        host: "smtp.example.com".into(),
+        port: 465,
+        security: "tls".into(),
+        from_mailbox: "SoloOps <soloops@example.com>".into(),
+        username: Some("soloops".into()),
+        password: Some("secret".into()),
+        updated_at: now_ms(),
+    };
+    let saved = database.upsert_smtp_settings(&record).await.unwrap();
+    assert_eq!(saved.host, "smtp.example.com");
+    assert_eq!(saved.port, 465);
+    assert_eq!(saved.security, "tls");
+    assert_eq!(saved.username.as_deref(), Some("soloops"));
+    assert_eq!(saved.password.as_deref(), Some("secret"));
+
+    let context_row = sqlx::query(
+        "SELECT context FROM audit_logs WHERE action = 'settings.smtp.update' ORDER BY sequence DESC LIMIT 1",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    let context: String = context_row.get("context");
+    assert!(context.contains("passwordConfigured"));
+    assert!(
+        !context.contains("secret"),
+        "the password must never reach the audit log"
+    );
+
+    let updated = SmtpSettingsRecord {
+        security: "starttls".into(),
+        username: None,
+        password: None,
+        ..record
+    };
+    let updated = database.upsert_smtp_settings(&updated).await.unwrap();
+    assert_eq!(updated.security, "starttls");
+    assert_eq!(updated.password, None);
+    assert_eq!(updated.username, None);
+
+    let invalid = SmtpSettingsRecord {
+        owner_id: owner.id.clone(),
+        host: "smtp.example.com".into(),
+        port: 465,
+        security: "plain".into(),
+        from_mailbox: "SoloOps <soloops@example.com>".into(),
+        username: Some("soloops".into()),
+        password: Some("secret".into()),
+        updated_at: now_ms(),
+    };
+    let error = database.upsert_smtp_settings(&invalid).await.unwrap_err();
+    assert!(matches!(error, StorageError::InvalidSmtpSecurity(security) if security == "plain"));
+
+    assert!(database.delete_smtp_settings(&owner.id).await.unwrap());
+    assert!(!database.delete_smtp_settings(&owner.id).await.unwrap());
+    assert!(database.get_smtp_settings(&owner.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn model_settings_roundtrip_delete_and_audit_exclude_the_api_key() {
+    let database = database().await;
+    let owner = database.create_owner("owner", "hash").await.unwrap();
+    assert!(database.get_model_settings(&owner.id).await.unwrap().is_none());
+
+    let record = ModelSettingsRecord {
+        owner_id: owner.id.clone(),
+        base_url: "https://models.example.com/v1".into(),
+        model_name: "example-model".into(),
+        api_key: Some("secret-key".into()),
+        updated_at: now_ms(),
+    };
+    let saved = database.upsert_model_settings(&record).await.unwrap();
+    assert_eq!(saved.base_url, "https://models.example.com/v1");
+    assert_eq!(saved.model_name, "example-model");
+    assert_eq!(saved.api_key.as_deref(), Some("secret-key"));
+
+    let context_row = sqlx::query(
+        "SELECT context FROM audit_logs WHERE action = 'settings.model.update' ORDER BY sequence DESC LIMIT 1",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    let context: String = context_row.get("context");
+    assert!(context.contains("apiKeyConfigured"));
+    assert!(
+        !context.contains("secret-key"),
+        "the API key must never reach the audit log"
+    );
+
+    // Keyless rows (local endpoints that authenticate nothing) stay usable.
+    let updated = ModelSettingsRecord {
+        api_key: None,
+        ..record
+    };
+    let updated = database.upsert_model_settings(&updated).await.unwrap();
+    assert_eq!(updated.api_key, None);
+
+    assert!(database.delete_model_settings(&owner.id).await.unwrap());
+    assert!(!database.delete_model_settings(&owner.id).await.unwrap());
+    assert!(database.get_model_settings(&owner.id).await.unwrap().is_none());
+}

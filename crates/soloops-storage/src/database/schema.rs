@@ -138,6 +138,69 @@ impl Database {
             .await?;
             transaction.commit().await?;
         }
+        let password_rotation_applied: Option<i64> =
+            sqlx::query_scalar("SELECT version FROM soloops_schema_migrations WHERE version = 7")
+                .fetch_optional(&self.pool)
+                .await?;
+        if password_rotation_applied.is_none() {
+            let mut transaction = self.pool.begin().await?;
+            sqlx::raw_sql(PASSWORD_ROTATION_SQL)
+                .execute(&mut *transaction)
+                .await?;
+            let checksum = format!("{:x}", Sha256::digest(PASSWORD_ROTATION_SQL.as_bytes()));
+            sqlx::query(
+                "INSERT INTO soloops_schema_migrations
+                 (version, name, checksum, applied_at, adopted)
+                 VALUES (7, 'password_rotation', ?, ?, 0)",
+            )
+            .bind(checksum)
+            .bind(now_ms())
+            .execute(&mut *transaction)
+            .await?;
+            transaction.commit().await?;
+        }
+        let smtp_settings_applied: Option<i64> =
+            sqlx::query_scalar("SELECT version FROM soloops_schema_migrations WHERE version = 8")
+                .fetch_optional(&self.pool)
+                .await?;
+        if smtp_settings_applied.is_none() {
+            let mut transaction = self.pool.begin().await?;
+            sqlx::raw_sql(SMTP_SETTINGS_SQL)
+                .execute(&mut *transaction)
+                .await?;
+            let checksum = format!("{:x}", Sha256::digest(SMTP_SETTINGS_SQL.as_bytes()));
+            sqlx::query(
+                "INSERT INTO soloops_schema_migrations
+                 (version, name, checksum, applied_at, adopted)
+                 VALUES (8, 'smtp_settings', ?, ?, 0)",
+            )
+            .bind(checksum)
+            .bind(now_ms())
+            .execute(&mut *transaction)
+            .await?;
+            transaction.commit().await?;
+        }
+        let model_settings_applied: Option<i64> =
+            sqlx::query_scalar("SELECT version FROM soloops_schema_migrations WHERE version = 9")
+                .fetch_optional(&self.pool)
+                .await?;
+        if model_settings_applied.is_none() {
+            let mut transaction = self.pool.begin().await?;
+            sqlx::raw_sql(MODEL_SETTINGS_SQL)
+                .execute(&mut *transaction)
+                .await?;
+            let checksum = format!("{:x}", Sha256::digest(MODEL_SETTINGS_SQL.as_bytes()));
+            sqlx::query(
+                "INSERT INTO soloops_schema_migrations
+                 (version, name, checksum, applied_at, adopted)
+                 VALUES (9, 'model_settings', ?, ?, 0)",
+            )
+            .bind(checksum)
+            .bind(now_ms())
+            .execute(&mut *transaction)
+            .await?;
+            transaction.commit().await?;
+        }
         self.verify_schema().await
     }
 
