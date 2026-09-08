@@ -38,7 +38,9 @@ cargo run -p soloopsctl -- migrate
 cargo run -p soloopsctl -- owner-init
 ```
 
-`owner-init` 要求交互终端，密码至少 12 个字符，并拒绝创建第二个 Owner。
+`owner-init` 要求交互终端，密码至少 12 个字符，并拒绝创建第二个 Owner。忘记密码时在本机执行 `cargo run -p soloopsctl -- owner-password-reset`，重置会撤销全部既有 Session 并写入审计日志。
+
+配置 `SOLOOPS_PASSWORD_ROTATION_ENABLED=true` 及收件邮箱后（需要 SMTP），API 进程会定期自动轮换 Owner 密码：先生成 24 字符强随机密码并邮件发送到指定邮箱，确认送达后才更新 Argon2id 哈希并撤销所有 Session；投递失败则保留旧密码并在下一周期重试。
 
 ## 开发运行
 

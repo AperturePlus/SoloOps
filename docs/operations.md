@@ -36,8 +36,11 @@ The API and Worker fail startup when the expected Schema is missing.
 | `SOLOOPS_SMTP_FROM`                      | required with SMTP             | Sender mailbox, optionally with a display name                        |
 | `SOLOOPS_SMTP_USERNAME`                  | unset                          | Optional SMTP username; requires a password reference                 |
 | `SOLOOPS_SMTP_PASSWORD_REF`              | unset                          | `env:<name>` reference paired with the SMTP username                  |
+| `SOLOOPS_PASSWORD_ROTATION_ENABLED`     | `false`                        | Periodic Owner password rotation; requires SMTP configuration         |
+| `SOLOOPS_PASSWORD_ROTATION_INTERVAL_HOURS` | `168`                        | Rotation interval, from 1 to 8760 hours                               |
+| `SOLOOPS_PASSWORD_ROTATION_EMAIL`        | required when enabled          | Mailbox receiving each freshly generated Owner password               |
 | `SOLOOPS_MODEL_BASE_URL`                 | `https://api.openai.com/v1`    | OpenAI-compatible API base URL                                        |
-| `SOLOOPS_MODEL_NAME`                     | required                       | Production model name                                                 |
+| `SOLOOPS_MODEL_NAME`                     | unset                          | Model name; unset until configured in the WebUI (Settings → Model API) |
 | `SOLOOPS_MODEL_API_KEY_REF`              | `env:OPENAI_API_KEY`           | Typed reference to the model API key; v1 supports `env:`              |
 | `SOLOOPS_PROMPT_CACHE_KEY_ENABLED`       | `false`                        | Send OpenAI `prompt_cache_key`; enable only on compatible endpoints   |
 | `SOLOOPS_MAX_TOOL_DURATION_MS`           | `600000`                       | Worker ceiling for one Tool Call; individual descriptors may be lower |
@@ -107,6 +110,17 @@ every recipient. Later checks send only when that recipient's last delivered IPv
 current address. Failed recipients are retried on the next cycle without resending to recipients that
 already succeeded. A missing SMTP configuration does not prevent API startup, but partially configured
 SMTP or an unresolved password reference does.
+
+## Model API settings
+
+The Owner WebUI (**Settings → Model API**) manages the LLM endpoint, model name and API key on top of
+the `SOLOOPS_MODEL_*` bootstrap. Saved values are stored in the `model_settings` table (migration 9)
+and take precedence over the environment; removing them restores the environment fallback. The API key
+is never returned over the API or written to the audit log. The worker re-resolves the effective
+settings between runs and rebuilds its provider when they change, so WebUI edits apply without a
+restart. An empty `SOLOOPS_MODEL_NAME` no longer fails worker startup; the worker logs a warning per
+poll cycle until the settings are configured, and `POST /api/settings/model/test` sends a minimal chat
+completion through the saved endpoint to verify it end to end.
 
 An `event_stream_corrupt` API error, or WebSocket close code `4002`, is intentionally non-retryable. Restore or repair the affected SQLite event row before reconnecting clients; the UI stops automatic retries so database corruption is not hidden by a reconnect loop.
 
