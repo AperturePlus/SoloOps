@@ -2,18 +2,13 @@ use std::{net::Ipv4Addr, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use lettre::{
-    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
-    message::{Mailbox, header::ContentType},
-    transport::smtp::authentication::Credentials,
-};
 use soloops_domain::{IpNotificationRecipientStatus, IpNotificationSettings, TestIpNotificationResponse};
 use soloops_storage::{AuditEntry, Database, IpNotificationRecord, now_ms};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::{Notify, watch};
 use tracing::{error, info, warn};
 
-use super::{AppConfig, SmtpConfig, SmtpSecurity, telemetry::Metrics};
+use super::{AppConfig, mail::MailDelivery, telemetry::Metrics};
 
 #[async_trait]
 trait PublicIpSource: Send + Sync {
@@ -66,95 +61,7 @@ fn parse_ipv4_body(body: &[u8]) -> Result<Ipv4Addr> {
         .context("public IP response is not an IPv4 address")
 }
 
-#[async_trait]
-trait MailSender: Send + Sync {
-    async fn send_ip_notification(
-        &self,
-        recipient: &str,
-        current: Ipv4Addr,
-        previous: Option<&str>,
-        detected_at: i64,
-    ) -> Result<()>;
-    async fn send_test(&self, recipient: &str) -> Result<()>;
-}
-
-struct SmtpMailer {
-    transport: AsyncSmtpTransport<Tokio1Executor>,
-    from: Mailbox,
-}
-
-impl SmtpMailer {
-    fn new(config: &SmtpConfig) -> Result<Self> {
-        let mut builder = match config.security {
-            SmtpSecurity::Tls => AsyncSmtpTransport::<Tokio1Executor>::relay(&config.host),
-            SmtpSecurity::StartTls => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host),
-        }
-        .context("invalid SMTP relay configuration")?
-        .port(config.port);
-        if let (Some(username), Some(password_env)) = (&config.username, &config.password_env) {
-            let password = std::env::var(password_env).with_context(|| {
-                format!("configured SMTP password environment variable {password_env} is not set")
-            })?;
-            if password.is_empty() {
-                anyhow::bail!("configured SMTP password environment variable {password_env} is empty");
-            }
-            builder = builder.credentials(Credentials::new(username.clone(), password));
-        }
-        Ok(Self {
-            transport: builder.build(),
-            from: config.from.parse().context("invalid SMTP sender mailbox")?,
-        })
-    }
-
-    async fn send(&self, recipient: &str, subject: String, body: String) -> Result<()> {
-        let message = Message::builder()
-            .from(self.from.clone())
-            .to(recipient
-                .parse::<Mailbox>()
-                .context("invalid recipient mailbox")?)
-            .subject(subject)
-            .header(ContentType::TEXT_PLAIN)
-            .body(body)
-            .context("failed to build email")?;
-        self.transport.send(message).await.context("SMTP send failed")?;
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl MailSender for SmtpMailer {
-    async fn send_ip_notification(
-        &self,
-        recipient: &str,
-        current: Ipv4Addr,
-        previous: Option<&str>,
-        detected_at: i64,
-    ) -> Result<()> {
-        let first = previous.is_none();
-        let subject = if first {
-            format!("[SoloOps] 当前公网 IPv4：{current}")
-        } else {
-            format!("[SoloOps] 公网 IPv4 已变更：{current}")
-        };
-        let detected_at = format_timestamp(detected_at);
-        let body = format!(
-            "SoloOps 检测到公网 IPv4。\n\n当前 IPv4：{current}\n此前 IPv4：{}\n检测时间：{detected_at}\n",
-            previous.unwrap_or("未记录")
-        );
-        self.send(recipient, subject, body).await
-    }
-
-    async fn send_test(&self, recipient: &str) -> Result<()> {
-        self.send(
-            recipient,
-            "[SoloOps] 公网 IP 通知测试".into(),
-            "这是一封 SoloOps 测试邮件。公网 IPv4 通知邮件配置工作正常。\n".into(),
-        )
-        .await
-    }
-}
-
-fn format_timestamp(timestamp_ms: i64) -> String {
+pub(super) fn format_timestamp(timestamp_ms: i64) -> String {
     OffsetDateTime::from_unix_timestamp_nanos(i128::from(timestamp_ms) * 1_000_000)
         .ok()
         .and_then(|value| value.format(&Rfc3339).ok())
@@ -165,39 +72,38 @@ fn format_timestamp(timestamp_ms: i64) -> String {
 pub struct NotificationService {
     database: Database,
     source: Arc<dyn PublicIpSource>,
-    mailer: Option<Arc<dyn MailSender>>,
+    delivery: MailDelivery,
     metrics: Arc<Metrics>,
     wake: Arc<Notify>,
     poll_interval: Duration,
 }
 
 impl NotificationService {
-    pub(super) fn new(database: Database, config: &AppConfig, metrics: Arc<Metrics>) -> Result<Self> {
+    pub(super) fn new(
+        database: Database,
+        config: &AppConfig,
+        metrics: Arc<Metrics>,
+        delivery: MailDelivery,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
-            .context("failed to construct public IP HTTP client")?;
-        let mailer = config
-            .smtp
-            .as_ref()
-            .map(SmtpMailer::new)
-            .transpose()?
-            .map(|mailer| Arc::new(mailer) as Arc<dyn MailSender>);
-        Ok(Self {
+            .expect("failed to construct public IP HTTP client");
+        Self {
             database,
             source: Arc::new(HttpPublicIpSource {
                 client,
                 endpoint: config.public_ip_endpoint.clone(),
             }),
-            mailer,
+            delivery,
             metrics,
             wake: Arc::new(Notify::new()),
             poll_interval: Duration::from_secs(config.public_ip_poll_seconds),
-        })
+        }
     }
 
-    pub fn smtp_configured(&self) -> bool {
-        self.mailer.is_some()
+    pub async fn smtp_configured(&self) -> bool {
+        self.delivery.smtp_configured().await
     }
 
     pub fn wake(&self) {
@@ -207,17 +113,24 @@ impl NotificationService {
     pub async fn settings(&self, owner_id: &str) -> Result<IpNotificationSettings> {
         Ok(settings_response(
             self.database.get_ip_notification_settings(owner_id).await?,
-            self.smtp_configured(),
+            self.smtp_configured().await,
         ))
     }
 
     pub async fn test(&self, owner_id: &str) -> Result<TestIpNotificationResponse> {
-        let mailer = self.mailer.as_ref().context("SMTP is not configured")?;
         let settings = self.database.get_ip_notification_settings(owner_id).await?;
         let mut sent_count = 0;
         let mut failed_recipients = Vec::new();
         for recipient in settings.recipients {
-            match mailer.send_test(&recipient.email).await {
+            let result = self
+                .delivery
+                .send_email(
+                    &recipient.email,
+                    "[SoloOps] 公网 IP 通知测试".into(),
+                    "这是一封 SoloOps 测试邮件。公网 IPv4 通知邮件配置工作正常。\n".into(),
+                )
+                .await;
+            match result {
                 Ok(()) => sent_count += 1,
                 Err(error) => {
                     warn!(owner_id, error = %error, "test notification email failed");
@@ -267,7 +180,9 @@ impl NotificationService {
     }
 
     async fn run_once(&self) {
-        let Some(mailer) = &self.mailer else { return };
+        if !self.delivery.smtp_configured().await {
+            return;
+        }
         let settings = match self.database.enabled_ip_notification_settings().await {
             Ok(settings) => settings,
             Err(error) => {
@@ -293,10 +208,7 @@ impl NotificationService {
         };
         let detected_at = now_ms();
         for setting in settings {
-            if let Err(error) = self
-                .notify_owner(&setting, mailer.as_ref(), current, detected_at)
-                .await
-            {
+            if let Err(error) = self.notify_owner(&setting, current, detected_at).await {
                 error!(owner_id = setting.owner_id, %error, "public IP notification cycle failed");
             }
         }
@@ -305,7 +217,6 @@ impl NotificationService {
     async fn notify_owner(
         &self,
         setting: &IpNotificationRecord,
-        mailer: &dyn MailSender,
         current: Ipv4Addr,
         detected_at: i64,
     ) -> Result<()> {
@@ -317,15 +228,18 @@ impl NotificationService {
             if recipient.last_notified_ipv4.as_deref() == Some(current_text.as_str()) {
                 continue;
             }
-            match mailer
-                .send_ip_notification(
-                    &recipient.email,
-                    current,
-                    recipient.last_notified_ipv4.as_deref(),
-                    detected_at,
-                )
-                .await
-            {
+            let first = recipient.last_notified_ipv4.is_none();
+            let subject = if first {
+                format!("[SoloOps] 当前公网 IPv4：{current}")
+            } else {
+                format!("[SoloOps] 公网 IPv4 已变更：{current}")
+            };
+            let body = format!(
+                "SoloOps 检测到公网 IPv4。\n\n当前 IPv4：{current}\n此前 IPv4：{}\n检测时间：{}\n",
+                recipient.last_notified_ipv4.as_deref().unwrap_or("未记录"),
+                format_timestamp(detected_at),
+            );
+            match self.delivery.send_email(&recipient.email, subject, body).await {
                 Ok(()) => {
                     self.database
                         .record_ip_notification_success(
@@ -426,6 +340,7 @@ fn settings_response(record: IpNotificationRecord, smtp_configured: bool) -> IpN
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::mail::MailSink;
     use std::{collections::HashSet, sync::Mutex};
 
     struct FakeSource(Mutex<Ipv4Addr>);
@@ -438,28 +353,18 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct FakeMailer {
-        sent: Mutex<Vec<(String, Ipv4Addr)>>,
+    struct FakeSink {
+        sent: Mutex<Vec<String>>,
         failures: Mutex<HashSet<String>>,
     }
 
     #[async_trait]
-    impl MailSender for FakeMailer {
-        async fn send_ip_notification(
-            &self,
-            recipient: &str,
-            current: Ipv4Addr,
-            _previous: Option<&str>,
-            _detected_at: i64,
-        ) -> Result<()> {
-            self.sent.lock().unwrap().push((recipient.to_owned(), current));
+    impl MailSink for FakeSink {
+        async fn send_raw(&self, recipient: &str, _subject: String, _body: String) -> Result<()> {
+            self.sent.lock().unwrap().push(recipient.to_owned());
             if self.failures.lock().unwrap().contains(recipient) {
                 anyhow::bail!("forced SMTP failure");
             }
-            Ok(())
-        }
-
-        async fn send_test(&self, _recipient: &str) -> Result<()> {
             Ok(())
         }
     }
@@ -490,11 +395,11 @@ mod tests {
             .await
             .unwrap();
         let source = Arc::new(FakeSource(Mutex::new(Ipv4Addr::new(203, 0, 113, 1))));
-        let mailer = Arc::new(FakeMailer::default());
+        let mailer = Arc::new(FakeSink::default());
         let service = NotificationService {
             database: database.clone(),
             source: source.clone(),
-            mailer: Some(mailer.clone()),
+            delivery: MailDelivery::fixed(mailer.clone()),
             metrics: Arc::new(Metrics::default()),
             wake: Arc::new(Notify::new()),
             poll_interval: Duration::from_secs(300),

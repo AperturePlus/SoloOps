@@ -444,3 +444,364 @@ async fn ssh_access_report_requires_owner_session_and_is_self_consistent() {
         }
     }
 }
+
+#[tokio::test]
+async fn owner_manages_smtp_delivery_from_the_webui() {
+    let (router, _) = context().await;
+    let cookie = login_cookie(&router).await;
+
+    let unauthorized = router
+        .clone()
+        .oneshot(Request::get("/api/settings/smtp").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::get("/api/settings/smtp")
+                .header(COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let settings: SmtpSettings = serde_json::from_slice(&body).unwrap();
+    assert!(!settings.configured);
+    assert_eq!(settings.source, None);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::put("/api/settings/smtp")
+                .header(header::ORIGIN, "http://127.0.0.1:5173")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(COOKIE, &cookie)
+                .body(Body::from(
+                    r#"{"host":"smtp.example.com","port":465,"security":"tls",
+                        "from":"SoloOps <soloops@example.com>","username":"soloops","password":"secret-password"}"#
+                        .replace('\n', ""),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    assert!(
+        !String::from_utf8_lossy(&body).contains("secret-password"),
+        "the saved password must never be echoed back"
+    );
+    let settings: SmtpSettings = serde_json::from_slice(&body).unwrap();
+    assert!(settings.configured);
+    assert_eq!(settings.source.as_deref(), Some("database"));
+    assert_eq!(settings.host.as_deref(), Some("smtp.example.com"));
+    assert_eq!(settings.port, Some(465));
+    assert_eq!(settings.security.as_deref(), Some("tls"));
+    assert_eq!(settings.from.as_deref(), Some("SoloOps <soloops@example.com>"));
+    assert_eq!(settings.username.as_deref(), Some("soloops"));
+    assert!(settings.password_configured);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::put("/api/settings/smtp")
+                .header(header::ORIGIN, "http://127.0.0.1:5173")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(COOKIE, &cookie)
+                .body(Body::from(
+                    r#"{"host":"smtp.example.com","port":465,"security":"plain",
+                        "from":"SoloOps <soloops@example.com>","username":"soloops"}"#
+                        .replace('\n', ""),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Re-saving without the password keeps the stored credential; an explicit
+    // empty password clears it, which then fails the pairing rule.
+    let response = router
+        .clone()
+        .oneshot(
+            Request::put("/api/settings/smtp")
+                .header(header::ORIGIN, "http://127.0.0.1:5173")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(COOKIE, &cookie)
+                .body(Body::from(
+                    r#"{"host":"smtp.example.com","port":587,"security":"starttls",
+                        "from":"SoloOps <soloops@example.com>","username":"soloops"}"#
+                        .replace('\n', ""),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let settings: SmtpSettings = serde_json::from_slice(&body).unwrap();
+    assert_eq!(settings.port, Some(587));
+    assert_eq!(settings.security.as_deref(), Some("starttls"));
+    assert!(
+        settings.password_configured,
+        "absent password must keep the stored credential"
+    );
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::put("/api/settings/smtp")
+                .header(header::ORIGIN, "http://127.0.0.1:5173")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(COOKIE, &cookie)
+                .body(Body::from(
+                    r#"{"host":"smtp.example.com","port":465,"security":"tls",
+                        "from":"SoloOps <soloops@example.com>","username":"soloops","password":""}"#
+                        .replace('\n', ""),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::delete("/api/settings/smtp")
+                .header(header::ORIGIN, "http://127.0.0.1:5173")
+                .header(COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::get("/api/settings/smtp")
+                .header(COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let settings: SmtpSettings = serde_json::from_slice(&body).unwrap();
+    assert!(!settings.configured);
+    assert_eq!(settings.source, None);
+}
+
+#[tokio::test]
+async fn smtp_test_delivery_requires_configuration_and_valid_recipient() {
+    let (router, _) = context().await;
+    let cookie = login_cookie(&router).await;
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/settings/smtp/test")
+                .header(header::ORIGIN, "http://127.0.0.1:5173")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(COOKIE, &cookie)
+                .body(Body::from(r#"{"recipient":"owner@example.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/settings/smtp/test")
+                .header(header::ORIGIN, "http://127.0.0.1:5173")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(COOKIE, &cookie)
+                .body(Body::from(r#"{"recipient":"not-an-email"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn owner_manages_model_settings_from_the_webui() {
+    let (router, _) = context().await;
+    let cookie = login_cookie(&router).await;
+
+    let unauthorized = router
+        .clone()
+        .oneshot(Request::get("/api/settings/model").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    // The test environment carries no model configuration.
+    let response = router
+        .clone()
+        .oneshot(
+            Request::get("/api/settings/model")
+                .header(COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let settings: ModelSettings = serde_json::from_slice(&body).unwrap();
+    assert!(!settings.configured);
+    assert_eq!(settings.source, None);
+
+    // An unconfigured endpoint refuses the test request.
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/settings/model/test")
+                .header(header::ORIGIN, "http://127.0.0.1:5173")
+                .header(COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::put("/api/settings/model")
+                .header(header::ORIGIN, "http://127.0.0.1:5173")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(COOKIE, &cookie)
+                .body(Body::from(
+                    r#"{"baseUrl":"http://127.0.0.1:9/v1","modelName":"example-model","apiKey":"secret-key"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    assert!(
+        !String::from_utf8_lossy(&body).contains("secret-key"),
+        "the saved API key must never be echoed back"
+    );
+    let settings: ModelSettings = serde_json::from_slice(&body).unwrap();
+    assert!(settings.configured);
+    assert_eq!(settings.source.as_deref(), Some("database"));
+    assert_eq!(settings.base_url.as_deref(), Some("http://127.0.0.1:9/v1"));
+    assert_eq!(settings.model_name.as_deref(), Some("example-model"));
+    assert!(settings.api_key_configured);
+
+    // Invalid payloads are rejected without touching the stored row.
+    let response = router
+        .clone()
+        .oneshot(
+            Request::put("/api/settings/model")
+                .header(header::ORIGIN, "http://127.0.0.1:5173")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(COOKIE, &cookie)
+                .body(Body::from(
+                    r#"{"baseUrl":"ftp://example.com","modelName":"example-model"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = router
+        .clone()
+        .oneshot(
+            Request::put("/api/settings/model")
+                .header(header::ORIGIN, "http://127.0.0.1:5173")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(COOKIE, &cookie)
+                .body(Body::from(
+                    r#"{"baseUrl":"http://127.0.0.1:9/v1","modelName":"   "}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Re-saving without the API key keeps the stored credential.
+    let response = router
+        .clone()
+        .oneshot(
+            Request::put("/api/settings/model")
+                .header(header::ORIGIN, "http://127.0.0.1:5173")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(COOKIE, &cookie)
+                .body(Body::from(
+                    r#"{"baseUrl":"http://127.0.0.1:9/v1","modelName":"renamed-model"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let settings: ModelSettings = serde_json::from_slice(&body).unwrap();
+    assert_eq!(settings.model_name.as_deref(), Some("renamed-model"));
+    assert!(
+        settings.api_key_configured,
+        "an absent key must keep the stored credential"
+    );
+
+    // The saved endpoint is unreachable, so the probe reports a failed
+    // round trip instead of pretending success.
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/settings/model/test")
+                .header(header::ORIGIN, "http://127.0.0.1:5173")
+                .header(COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let result: TestModelSettingsResponse = serde_json::from_slice(&body).unwrap();
+    assert!(!result.responded);
+    assert!(result.error.is_some());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::delete("/api/settings/model")
+                .header(header::ORIGIN, "http://127.0.0.1:5173")
+                .header(COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::get("/api/settings/model")
+                .header(COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let settings: ModelSettings = serde_json::from_slice(&body).unwrap();
+    assert!(!settings.configured);
+    assert_eq!(settings.source, None);
+}

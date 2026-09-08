@@ -1,4 +1,5 @@
 use super::*;
+use soloops_application::EnvModelConfig;
 
 pub struct AppConfig {
     pub environment: String,
@@ -16,6 +17,10 @@ pub struct AppConfig {
     pub public_ip_endpoint: String,
     pub public_ip_poll_seconds: u64,
     pub smtp: Option<SmtpConfig>,
+    pub password_rotation: PasswordRotationConfig,
+    /// Environment bootstrap for the LLM API; owner-managed database settings
+    /// (Settings → Model API) take precedence over these values.
+    pub model_env: EnvModelConfig,
 }
 
 #[derive(Clone)]
@@ -32,6 +37,23 @@ pub struct SmtpConfig {
 pub enum SmtpSecurity {
     Tls,
     StartTls,
+}
+
+#[derive(Clone, Debug)]
+pub struct PasswordRotationConfig {
+    pub enabled: bool,
+    pub interval_hours: i64,
+    pub recipient_email: String,
+}
+
+impl PasswordRotationConfig {
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            interval_hours: 168,
+            recipient_email: String::new(),
+        }
+    }
 }
 
 impl AppConfig {
@@ -73,6 +95,13 @@ impl AppConfig {
             std::env::var("SOLOOPS_SMTP_USERNAME").ok(),
             std::env::var("SOLOOPS_SMTP_PASSWORD_REF").ok(),
         )?;
+        let password_rotation = password_rotation_config_from_values(
+            std::env::var("SOLOOPS_PASSWORD_ROTATION_ENABLED").ok(),
+            std::env::var("SOLOOPS_PASSWORD_ROTATION_INTERVAL_HOURS").ok(),
+            std::env::var("SOLOOPS_PASSWORD_ROTATION_EMAIL").ok(),
+            smtp.is_some(),
+        )?;
+        let model_env = EnvModelConfig::from_environment()?;
         Ok(Self {
             secure_cookies: environment == "production",
             environment,
@@ -89,6 +118,8 @@ impl AppConfig {
             public_ip_endpoint: env("SOLOOPS_PUBLIC_IP_ENDPOINT", "https://api.ipify.org"),
             public_ip_poll_seconds,
             smtp,
+            password_rotation,
+            model_env,
         })
     }
 
@@ -109,8 +140,57 @@ impl AppConfig {
             public_ip_endpoint: "https://api.ipify.org".into(),
             public_ip_poll_seconds: 300,
             smtp: None,
+            password_rotation: PasswordRotationConfig::disabled(),
+            model_env: EnvModelConfig {
+                base_url: "https://api.openai.com/v1".into(),
+                model_name: String::new(),
+                // A variable no test ever sets, so the environment fallback
+                // stays deterministically unconfigured.
+                api_key_ref: "env:SOLOOPS_MODEL_TEST_UNSET_KEY_3E57"
+                    .parse()
+                    .expect("valid test secret reference"),
+            },
         }
     }
+}
+
+fn password_rotation_config_from_values(
+    enabled: Option<String>,
+    interval_hours: Option<String>,
+    email: Option<String>,
+    smtp_configured: bool,
+) -> Result<PasswordRotationConfig> {
+    let enabled = match enabled.as_deref() {
+        Some(value) if !value.trim().is_empty() => parse_bool(value)?,
+        _ => false,
+    };
+    let interval_hours = match interval_hours.as_deref() {
+        Some(value) if !value.trim().is_empty() => value
+            .trim()
+            .parse::<i64>()
+            .context("SOLOOPS_PASSWORD_ROTATION_INTERVAL_HOURS must be an integer")?,
+        _ => 168,
+    };
+    if !(1..=24 * 365).contains(&interval_hours) {
+        anyhow::bail!("SOLOOPS_PASSWORD_ROTATION_INTERVAL_HOURS must be between 1 and 8760");
+    }
+    let recipient_email = email.unwrap_or_default().trim().to_owned();
+    if enabled {
+        if !smtp_configured {
+            anyhow::bail!("SOLOOPS_PASSWORD_ROTATION_ENABLED requires SMTP configuration");
+        }
+        if recipient_email.is_empty() {
+            anyhow::bail!("SOLOOPS_PASSWORD_ROTATION_EMAIL is required when password rotation is enabled");
+        }
+        recipient_email
+            .parse::<lettre::Address>()
+            .context("SOLOOPS_PASSWORD_ROTATION_EMAIL must be a valid email address")?;
+    }
+    Ok(PasswordRotationConfig {
+        enabled,
+        interval_hours,
+        recipient_email,
+    })
 }
 
 fn smtp_config_from_values(
@@ -242,5 +322,52 @@ mod tests {
         );
         assert!(parse_password_ref("secret").is_err());
         assert_eq!(parse_password_ref("env:SMTP_PASSWORD").unwrap(), "SMTP_PASSWORD");
+    }
+
+    #[test]
+    fn password_rotation_requires_smtp_and_valid_recipient_when_enabled() {
+        let disabled = password_rotation_config_from_values(None, None, None, false).unwrap();
+        assert!(!disabled.enabled);
+        assert_eq!(disabled.interval_hours, 168);
+
+        let configured = password_rotation_config_from_values(
+            Some("true".into()),
+            Some("24".into()),
+            Some("owner@example.com".into()),
+            true,
+        )
+        .unwrap();
+        assert!(configured.enabled);
+        assert_eq!(configured.interval_hours, 24);
+        assert_eq!(configured.recipient_email, "owner@example.com");
+
+        assert!(
+            password_rotation_config_from_values(
+                Some("true".into()),
+                None,
+                Some("owner@example.com".into()),
+                false
+            )
+            .is_err(),
+            "enabling rotation without SMTP must fail"
+        );
+        assert!(
+            password_rotation_config_from_values(Some("true".into()), None, None, true).is_err(),
+            "enabling rotation without a recipient must fail"
+        );
+        assert!(
+            password_rotation_config_from_values(
+                Some("true".into()),
+                None,
+                Some("not-an-email".into()),
+                true
+            )
+            .is_err(),
+            "enabling rotation with an invalid recipient must fail"
+        );
+        assert!(
+            password_rotation_config_from_values(Some("true".into()), Some("0".into()), None, true).is_err(),
+            "interval must stay within one hour and one year"
+        );
     }
 }

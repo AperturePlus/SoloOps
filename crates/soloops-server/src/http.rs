@@ -30,12 +30,20 @@ use rand::random;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soloops_domain::{
-    ApiErrorResponse, ApprovalDecisionRequest, CreateTaskRequest, IpNotificationSettings, LoginRequest,
-    Owner, RunDetail, RuntimeSnapshot, SessionResponse, SshAccessReport, TaskSummary,
-    TestIpNotificationResponse, ToolCallSummary, UpdateIpNotificationSettingsRequest,
+use soloops_application::{
+    ChatCompletionsProvider, EffectiveModelSettings, ModelProvider, ModelRequest, ModelSettingsSnapshot,
+    SecretValue, model_settings_snapshot, resolve_model_settings,
 };
-use soloops_storage::{AuditEntry, AuthenticatedOwner, Database, StorageError, now_ms};
+use soloops_domain::{
+    AgentPlan, ApiErrorResponse, ApprovalDecisionRequest, BudgetSnapshot, CreateTaskRequest,
+    IpNotificationSettings, LoginRequest, ModelSettings, Owner, RunDetail, RuntimeSnapshot, SessionResponse,
+    SmtpSettings, SshAccessReport, TaskSummary, TestIpNotificationResponse, TestModelSettingsResponse,
+    TestSmtpDeliveryRequest, TestSmtpDeliveryResponse, ToolCallSummary, UpdateIpNotificationSettingsRequest,
+    UpdateModelSettingsRequest, UpdateSmtpSettingsRequest,
+};
+use soloops_storage::{
+    AuditEntry, AuthenticatedOwner, Database, ModelSettingsRecord, SmtpSettingsRecord, StorageError, now_ms,
+};
 use tokio::sync::Mutex;
 use tower_http::{
     catch_panic::CatchPanicLayer,
@@ -49,17 +57,21 @@ use tracing_subscriber::EnvFilter;
 mod auth;
 mod config;
 mod error;
+mod mail;
 mod notifications;
+mod password_rotation;
 mod ssh_access;
 mod telemetry;
 
 pub use auth::SESSION_COOKIE;
-pub use config::{AppConfig, SmtpConfig, SmtpSecurity};
+pub use config::{AppConfig, PasswordRotationConfig, SmtpConfig, SmtpSecurity};
 pub use notifications::NotificationService;
+pub use password_rotation::PasswordRotationService;
 pub use telemetry::init_telemetry;
 
 use auth::{LoginLimiter, login, logout, require_owner, session};
 use error::AppError;
+use mail::MailDelivery;
 use telemetry::Metrics;
 
 #[derive(Clone)]
@@ -69,6 +81,7 @@ struct AppState {
     metrics: Arc<Metrics>,
     login_limiter: LoginLimiter,
     notifications: NotificationService,
+    mail: MailDelivery,
 }
 
 pub fn build_router(database: Database, config: AppConfig) -> Router {
@@ -80,15 +93,24 @@ pub fn build_router(database: Database, config: AppConfig) -> Router {
 pub fn build_router_and_notifications(
     database: Database,
     config: AppConfig,
-) -> Result<(Router, NotificationService)> {
+) -> Result<(Router, NotificationService, PasswordRotationService)> {
     let metrics_state = Arc::new(Metrics::default());
-    let notifications = NotificationService::new(database.clone(), &config, metrics_state.clone())?;
+    let mail = MailDelivery::new(database.clone(), config.smtp.clone());
+    let notifications =
+        NotificationService::new(database.clone(), &config, metrics_state.clone(), mail.clone());
+    let password_rotation = PasswordRotationService::new(
+        database.clone(),
+        &config.password_rotation,
+        metrics_state.clone(),
+        mail.clone(),
+    );
     let state = AppState {
         database,
         config: Arc::new(config),
         metrics: metrics_state,
         login_limiter: LoginLimiter::new(),
         notifications: notifications.clone(),
+        mail,
     };
     let mut router = Router::new()
         .route("/healthz", get(health))
@@ -113,6 +135,20 @@ pub fn build_router_and_notifications(
             get(get_ip_notification_settings).put(update_ip_notification_settings),
         )
         .route("/api/settings/ip-notifications/test", post(test_ip_notifications))
+        .route(
+            "/api/settings/smtp",
+            get(get_smtp_settings)
+                .put(update_smtp_settings)
+                .delete(delete_smtp_settings),
+        )
+        .route("/api/settings/smtp/test", post(test_smtp_delivery))
+        .route(
+            "/api/settings/model",
+            get(get_model_settings)
+                .put(update_model_settings)
+                .delete(delete_model_settings),
+        )
+        .route("/api/settings/model/test", post(test_model_settings))
         .route("/api/settings/ssh-access", get(get_ssh_access))
         .layer(middleware::from_fn_with_state(state.clone(), observe_request))
         .layer(middleware::from_fn_with_state(state.clone(), enforce_origin))
@@ -132,7 +168,7 @@ pub fn build_router_and_notifications(
         router = router
             .fallback_service(ServeDir::new(&state.config.web_dist).not_found_service(ServeFile::new(index)));
     }
-    Ok((router, notifications))
+    Ok((router, notifications, password_rotation))
 }
 
 async fn observe_request(State(state): State<AppState>, request: Request<Body>, next: Next) -> Response {
@@ -201,7 +237,7 @@ async fn update_ip_notification_settings(
             "at least one recipient is required when notifications are enabled",
         ));
     }
-    if input.enabled && !state.notifications.smtp_configured() {
+    if input.enabled && !state.notifications.smtp_configured().await {
         return Err(AppError::conflict(
             "notification_transport_unconfigured",
             "SMTP is not configured",
@@ -225,7 +261,7 @@ async fn test_ip_notifications(
     jar: CookieJar,
 ) -> Result<(StatusCode, Json<TestIpNotificationResponse>), AppError> {
     let owner = require_owner(&state, &jar).await?;
-    if !state.notifications.smtp_configured() {
+    if !state.notifications.smtp_configured().await {
         return Err(AppError::conflict(
             "notification_transport_unconfigured",
             "SMTP is not configured",
@@ -252,6 +288,287 @@ async fn test_ip_notifications(
         StatusCode::BAD_GATEWAY
     };
     Ok((status, Json(response)))
+}
+
+async fn get_smtp_settings(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> Result<Json<SmtpSettings>, AppError> {
+    require_owner(&state, &jar).await?;
+    let snapshot = state.mail.snapshot().await.map_err(AppError::internal)?;
+    Ok(Json(smtp_settings_response(snapshot)))
+}
+
+async fn update_smtp_settings(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    payload: Result<Json<UpdateSmtpSettingsRequest>, JsonRejection>,
+) -> Result<Json<SmtpSettings>, AppError> {
+    let owner = require_owner(&state, &jar).await?;
+    let Json(input) = payload.map_err(|error| AppError::invalid_payload(error.body_text()))?;
+    let input = input
+        .normalize()
+        .map_err(|error| AppError::validation(error.field, error.message))?;
+    input
+        .from
+        .parse::<lettre::message::Mailbox>()
+        .map_err(|_| AppError::validation("from", "must be a valid sender mailbox"))?;
+    let existing = state.database.get_smtp_settings(&owner.owner.id).await?;
+    // Absent keeps the stored credential, an empty string clears it, and a
+    // non-empty string replaces it.
+    let password = match (&input.password, &existing) {
+        (None, Some(row)) => row.password.clone(),
+        (None, None) => None,
+        (Some(value), _) if value.is_empty() => None,
+        (Some(value), _) => Some(value.clone()),
+    };
+    if input.username.is_some() != password.is_some() {
+        return Err(AppError::validation(
+            "username",
+            "username and password must be configured together",
+        ));
+    }
+    let record = SmtpSettingsRecord {
+        owner_id: owner.owner.id.clone(),
+        host: input.host,
+        port: i64::from(input.port),
+        security: input.security,
+        from_mailbox: input.from,
+        username: input.username,
+        password,
+        updated_at: now_ms(),
+    };
+    state.database.upsert_smtp_settings(&record).await?;
+    let snapshot = state.mail.snapshot().await.map_err(AppError::internal)?;
+    Ok(Json(smtp_settings_response(snapshot)))
+}
+
+async fn delete_smtp_settings(State(state): State<AppState>, jar: CookieJar) -> Result<StatusCode, AppError> {
+    let owner = require_owner(&state, &jar).await?;
+    state.database.delete_smtp_settings(&owner.owner.id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn test_smtp_delivery(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    payload: Result<Json<TestSmtpDeliveryRequest>, JsonRejection>,
+) -> Result<(StatusCode, Json<TestSmtpDeliveryResponse>), AppError> {
+    let owner = require_owner(&state, &jar).await?;
+    let Json(input) = payload.map_err(|error| AppError::invalid_payload(error.body_text()))?;
+    let input = input
+        .normalize()
+        .map_err(|error| AppError::validation(error.field, error.message))?;
+    if !state.mail.smtp_configured().await {
+        return Err(AppError::conflict(
+            "notification_transport_unconfigured",
+            "SMTP is not configured; save the settings before sending a test email",
+        ));
+    }
+    let result = state
+        .mail
+        .send_email(
+            &input.recipient,
+            "[SoloOps] SMTP 测试邮件".into(),
+            "这是一封 SoloOps SMTP 配置测试邮件。收到本邮件说明当前 SMTP 配置可以正常投递。\n".into(),
+        )
+        .await;
+    let response = match result {
+        Ok(()) => TestSmtpDeliveryResponse {
+            delivered: true,
+            error: None,
+        },
+        Err(error) => TestSmtpDeliveryResponse {
+            delivered: false,
+            error: Some(error.to_string()),
+        },
+    };
+    state
+        .database
+        .write_audit(AuditEntry {
+            actor_type: "owner",
+            actor_id: Some(owner.owner.id.clone()),
+            action: "settings.smtp.test",
+            object_type: Some("smtp_settings"),
+            object_id: Some(owner.owner.id.clone()),
+            outcome: if response.delivered { "success" } else { "failure" },
+            context: json!({ "recipient": input.recipient }),
+        })
+        .await?;
+    let status = if response.delivered {
+        StatusCode::OK
+    } else {
+        StatusCode::BAD_GATEWAY
+    };
+    Ok((status, Json(response)))
+}
+
+fn smtp_settings_response(snapshot: mail::SmtpSnapshot) -> SmtpSettings {
+    SmtpSettings {
+        configured: snapshot.configured,
+        source: snapshot.source.map(str::to_owned),
+        host: snapshot.host,
+        port: snapshot.port,
+        security: snapshot.security.map(|security| {
+            match security {
+                SmtpSecurity::Tls => "tls",
+                SmtpSecurity::StartTls => "starttls",
+            }
+            .to_owned()
+        }),
+        from: snapshot.from,
+        username: snapshot.username,
+        password_configured: snapshot.password_configured,
+    }
+}
+
+async fn get_model_settings(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> Result<Json<ModelSettings>, AppError> {
+    let owner = require_owner(&state, &jar).await?;
+    let snapshot = model_settings_snapshot(&state.database, &owner.owner.id, &state.config.model_env)
+        .await
+        .map_err(AppError::internal)?;
+    Ok(Json(model_settings_response(snapshot)))
+}
+
+async fn update_model_settings(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    payload: Result<Json<UpdateModelSettingsRequest>, JsonRejection>,
+) -> Result<Json<ModelSettings>, AppError> {
+    let owner = require_owner(&state, &jar).await?;
+    let Json(input) = payload.map_err(|error| AppError::invalid_payload(error.body_text()))?;
+    let input = input
+        .normalize()
+        .map_err(|error| AppError::validation(error.field, error.message))?;
+    let existing = state.database.get_model_settings(&owner.owner.id).await?;
+    // Absent keeps the stored credential, an empty string clears it (for
+    // endpoints that authenticate nothing), and a non-empty string replaces it.
+    let api_key = match (&input.api_key, &existing) {
+        (None, Some(row)) => row.api_key.clone(),
+        (None, None) => None,
+        (Some(value), _) if value.is_empty() => None,
+        (Some(value), _) => Some(value.clone()),
+    };
+    let record = ModelSettingsRecord {
+        owner_id: owner.owner.id.clone(),
+        base_url: input.base_url,
+        model_name: input.model_name,
+        api_key,
+        updated_at: now_ms(),
+    };
+    state.database.upsert_model_settings(&record).await?;
+    let snapshot = model_settings_snapshot(&state.database, &owner.owner.id, &state.config.model_env)
+        .await
+        .map_err(AppError::internal)?;
+    Ok(Json(model_settings_response(snapshot)))
+}
+
+async fn delete_model_settings(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> Result<StatusCode, AppError> {
+    let owner = require_owner(&state, &jar).await?;
+    state.database.delete_model_settings(&owner.owner.id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn test_model_settings(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> Result<(StatusCode, Json<TestModelSettingsResponse>), AppError> {
+    let owner = require_owner(&state, &jar).await?;
+    let resolved = resolve_model_settings(&state.database, &owner.owner.id, &state.config.model_env)
+        .await
+        .map_err(AppError::internal)?;
+    let Some(settings) = resolved else {
+        return Err(AppError::conflict(
+            "model_settings_unconfigured",
+            "Model API is not configured; save the settings before sending a test request",
+        ));
+    };
+    let response = probe_model_endpoint(&settings).await;
+    state
+        .database
+        .write_audit(AuditEntry {
+            actor_type: "owner",
+            actor_id: Some(owner.owner.id.clone()),
+            action: "settings.model.test",
+            object_type: Some("model_settings"),
+            object_id: Some(owner.owner.id.clone()),
+            outcome: if response.responded { "success" } else { "failure" },
+            // Never include the API key; the endpoint coordinates suffice.
+            context: json!({
+                "baseUrl": settings.base_url,
+                "modelName": settings.model_name,
+            }),
+        })
+        .await?;
+    let status = if response.responded {
+        StatusCode::OK
+    } else {
+        StatusCode::BAD_GATEWAY
+    };
+    Ok((status, Json(response)))
+}
+
+/// Sends a minimal chat-completion request through the effective settings so
+/// the Owner can verify the endpoint, model and credential end to end.
+async fn probe_model_endpoint(settings: &EffectiveModelSettings) -> TestModelSettingsResponse {
+    let provider = match ChatCompletionsProvider::new(
+        &settings.base_url,
+        settings.model_name.clone(),
+        SecretValue::new(settings.api_key.expose_secret().to_owned()),
+    ) {
+        Ok(provider) => provider,
+        Err(error) => {
+            return TestModelSettingsResponse {
+                responded: false,
+                error: Some(error.to_string()),
+            };
+        }
+    };
+    let request = ModelRequest {
+        logical_request_key: format!("settings-model-test:{}", now_ms()),
+        attempt_key: uuid::Uuid::new_v4().to_string(),
+        goal: "Connection test. Reply with the single word: pong.".to_owned(),
+        plan: AgentPlan::default(),
+        journal: Vec::new(),
+        evidence: Vec::new(),
+        tools: Vec::new(),
+        remaining_budget: BudgetSnapshot {
+            max_model_turns: 1,
+            max_tool_calls: 0,
+            max_input_tokens: 2048,
+            max_output_tokens: 32,
+            max_duration_ms: 30_000,
+            max_tool_duration_ms: 1_000,
+            max_tool_output_bytes: 2048,
+            max_workspace_bytes: 2048,
+        },
+    };
+    match provider.complete(request).await {
+        Ok(_) => TestModelSettingsResponse {
+            responded: true,
+            error: None,
+        },
+        Err(error) => TestModelSettingsResponse {
+            responded: false,
+            error: Some(error.to_string()),
+        },
+    }
+}
+
+fn model_settings_response(snapshot: ModelSettingsSnapshot) -> ModelSettings {
+    ModelSettings {
+        configured: snapshot.configured,
+        source: snapshot.source.map(str::to_owned),
+        base_url: snapshot.base_url,
+        model_name: snapshot.model_name,
+        api_key_configured: snapshot.api_key_configured,
+    }
 }
 
 async fn get_ssh_access(

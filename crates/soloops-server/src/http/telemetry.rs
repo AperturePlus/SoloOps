@@ -32,6 +32,8 @@ pub(super) struct Metrics {
     pub(super) public_ip_check_failures: AtomicU64,
     pub(super) ip_notification_emails_sent: AtomicU64,
     pub(super) ip_notification_email_failures: AtomicU64,
+    pub(super) password_rotations: AtomicU64,
+    pub(super) password_rotation_email_failures: AtomicU64,
 }
 
 impl Metrics {
@@ -53,7 +55,11 @@ impl Metrics {
                 "# TYPE soloops_ip_notification_emails_sent_total counter\n",
                 "soloops_ip_notification_emails_sent_total {}\n",
                 "# TYPE soloops_ip_notification_email_failures_total counter\n",
-                "soloops_ip_notification_email_failures_total {}\n"
+                "soloops_ip_notification_email_failures_total {}\n",
+                "# TYPE soloops_password_rotations_total counter\n",
+                "soloops_password_rotations_total {}\n",
+                "# TYPE soloops_password_rotation_email_failures_total counter\n",
+                "soloops_password_rotation_email_failures_total {}\n"
             ),
             self.requests.load(Ordering::Relaxed),
             self.errors.load(Ordering::Relaxed),
@@ -63,6 +69,8 @@ impl Metrics {
             self.public_ip_check_failures.load(Ordering::Relaxed),
             self.ip_notification_emails_sent.load(Ordering::Relaxed),
             self.ip_notification_email_failures.load(Ordering::Relaxed),
+            self.password_rotations.load(Ordering::Relaxed),
+            self.password_rotation_email_failures.load(Ordering::Relaxed),
         )
     }
 }

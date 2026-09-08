@@ -17,11 +17,13 @@ async fn main() -> Result<()> {
     let address: SocketAddr = format!("{}:{}", config.host, config.api_port)
         .parse()
         .context("invalid SOLOOPS_HOST or SOLOOPS_API_PORT")?;
-    let (router, notifications) = build_router_and_notifications(database.clone(), config)?;
+    let (router, notifications, password_rotation) =
+        build_router_and_notifications(database.clone(), config)?;
     let listener = tokio::net::TcpListener::bind(address).await?;
     info!(%address, "SoloOps API listening");
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let notification_task = tokio::spawn(notifications.run(shutdown_rx));
+    let notification_task = tokio::spawn(notifications.run(shutdown_rx.clone()));
+    let rotation_task = tokio::spawn(password_rotation.run(shutdown_rx));
     let shutdown_for_server = shutdown_tx.clone();
     let server_result = axum::serve(
         listener,
@@ -36,6 +38,7 @@ async fn main() -> Result<()> {
     notification_task
         .await
         .context("notification monitor task failed")?;
+    rotation_task.await.context("password rotation task failed")?;
     server_result?;
     database.close().await;
     Ok(())
