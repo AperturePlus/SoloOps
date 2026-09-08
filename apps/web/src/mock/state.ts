@@ -8,6 +8,8 @@ import type {
 } from "$lib/contracts";
 import type { IpNotificationSettings } from "$lib/contracts";
 import type { SshAccessReport } from "$lib/contracts";
+import type { SmtpSettings } from "$lib/contracts";
+import type { ModelSettings } from "$lib/contracts";
 
 export interface ScenarioHandle {
   runId: string;
@@ -24,6 +26,8 @@ export interface MockState {
   events: EventEnvelope[];
   scenarios: Map<string, ScenarioHandle>;
   ipNotifications: IpNotificationSettings;
+  smtpSettings: SmtpSettings;
+  modelSettings: ModelSettings;
   sshAccess: SshAccessReport;
 }
 
@@ -166,6 +170,23 @@ export function createState(): MockState {
       lastCheckedAt: Date.now(),
       lastChangedAt: Date.now(),
       recipients: []
+    },
+    smtpSettings: {
+      configured: true,
+      source: "database",
+      host: "smtp.example.com",
+      port: 465,
+      security: "tls",
+      from: "SoloOps <soloops@example.com>",
+      username: "soloops",
+      passwordConfigured: true
+    },
+    modelSettings: {
+      configured: true,
+      source: "database",
+      baseUrl: "https://api.example.com/v1",
+      modelName: "example-model",
+      apiKeyConfigured: true
     },
     sshAccess: mockSshAccess()
   };

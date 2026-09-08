@@ -142,6 +142,121 @@ export function createMockRouter(deps: MockRouterDeps) {
       }
     }
 
+    // /api/settings/smtp
+    if (segments[1] === "settings" && segments[2] === "smtp") {
+      if (method === "GET" && segments.length === 3) {
+        sendJson(res, 200, deps.state.smtpSettings);
+        return true;
+      }
+      if (method === "PUT" && segments.length === 3) {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const previous = deps.state.smtpSettings;
+        const passwordProvided = typeof body.password === "string" && body.password !== "";
+        const passwordCleared = typeof body.password === "string" && body.password === "";
+        const username = body.username ? String(body.username).trim() : null;
+        const passwordConfigured = passwordCleared
+          ? false
+          : passwordProvided
+            ? true
+            : previous.passwordConfigured;
+        if ((username !== null) !== passwordConfigured) {
+          sendError(
+            res,
+            400,
+            "invalid_request",
+            "username and password must be configured together"
+          );
+          return true;
+        }
+        deps.state.smtpSettings = {
+          configured: true,
+          source: "database",
+          host: String(body.host ?? previous.host ?? ""),
+          port: Number(body.port ?? previous.port ?? 465),
+          security: body.security === "starttls" ? "starttls" : "tls",
+          from: String(body.from ?? previous.from ?? ""),
+          username,
+          passwordConfigured
+        };
+        sendJson(res, 200, deps.state.smtpSettings);
+        return true;
+      }
+      if (method === "DELETE" && segments.length === 3) {
+        deps.state.smtpSettings = {
+          configured: false,
+          source: null,
+          host: null,
+          port: null,
+          security: null,
+          from: null,
+          username: null,
+          passwordConfigured: false
+        };
+        send204(res);
+        return true;
+      }
+      if (method === "POST" && segments.length === 4 && segments[3] === "test") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const recipient = String(body.recipient ?? "").trim();
+        if (!recipient.includes("@")) {
+          sendError(res, 400, "invalid_request", "recipient must be a valid email address");
+          return true;
+        }
+        if (!deps.state.smtpSettings.configured) {
+          sendError(res, 409, "notification_transport_unconfigured", "SMTP is not configured");
+          return true;
+        }
+        sendJson(res, 200, { delivered: true, error: null });
+        return true;
+      }
+    }
+
+    // /api/settings/model
+    if (segments[1] === "settings" && segments[2] === "model") {
+      if (method === "GET" && segments.length === 3) {
+        sendJson(res, 200, deps.state.modelSettings);
+        return true;
+      }
+      if (method === "PUT" && segments.length === 3) {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const previous = deps.state.modelSettings;
+        const apiKeyProvided = typeof body.apiKey === "string" && body.apiKey !== "";
+        const apiKeyCleared = typeof body.apiKey === "string" && body.apiKey === "";
+        deps.state.modelSettings = {
+          configured: true,
+          source: "database",
+          baseUrl: String(body.baseUrl ?? previous.baseUrl ?? ""),
+          modelName: String(body.modelName ?? previous.modelName ?? ""),
+          apiKeyConfigured: apiKeyCleared
+            ? false
+            : apiKeyProvided
+              ? true
+              : previous.source === "database" && previous.apiKeyConfigured
+        };
+        sendJson(res, 200, deps.state.modelSettings);
+        return true;
+      }
+      if (method === "DELETE" && segments.length === 3) {
+        deps.state.modelSettings = {
+          configured: false,
+          source: null,
+          baseUrl: null,
+          modelName: null,
+          apiKeyConfigured: false
+        };
+        send204(res);
+        return true;
+      }
+      if (method === "POST" && segments.length === 4 && segments[3] === "test") {
+        if (!deps.state.modelSettings.configured) {
+          sendError(res, 409, "model_settings_unconfigured", "Model API is not configured");
+          return true;
+        }
+        sendJson(res, 200, { responded: true, error: null });
+        return true;
+      }
+    }
+
     // /api/settings/ssh-access
     if (segments[1] === "settings" && segments[2] === "ssh-access") {
       if (method === "GET" && segments.length === 3) {

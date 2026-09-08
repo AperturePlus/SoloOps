@@ -44,6 +44,52 @@ export type TestIpNotificationResponse = {
   failedRecipients: string[];
 };
 
+export type SmtpSettings = {
+  configured: boolean;
+  source: "database" | "environment" | null;
+  host: string | null;
+  port: number | null;
+  security: "tls" | "starttls" | null;
+  from: string | null;
+  username: string | null;
+  passwordConfigured: boolean;
+};
+
+export type UpdateSmtpSettingsRequest = {
+  host: string;
+  port: number;
+  security: "tls" | "starttls";
+  from: string;
+  username?: string | null;
+  /** Absent keeps the stored credential, an empty string clears it. */
+  password?: string | null;
+};
+
+export type TestSmtpDeliveryResponse = {
+  delivered: boolean;
+  error: string | null;
+};
+
+export type ModelSettings = {
+  configured: boolean;
+  source: "database" | "environment" | null;
+  baseUrl: string | null;
+  modelName: string | null;
+  apiKeyConfigured: boolean;
+};
+
+export type UpdateModelSettingsRequest = {
+  baseUrl: string;
+  modelName: string;
+  /** Absent keeps the stored credential, an empty string clears it. */
+  apiKey?: string | null;
+};
+
+export type TestModelSettingsResponse = {
+  responded: boolean;
+  error: string | null;
+};
+
 export type SshKeyFileRole = "user" | "administrators";
 
 export type SshAuthorizedKeyEntry = {

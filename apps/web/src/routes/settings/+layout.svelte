@@ -7,6 +7,18 @@
 
   const NAV = [
     {
+      href: "/settings/model",
+      label: "Model API",
+      icon: "spark" as const,
+      note: "LLM endpoint, model and API key"
+    },
+    {
+      href: "/settings/smtp",
+      label: "SMTP delivery",
+      icon: "server" as const,
+      note: "Mail relay for outbound email"
+    },
+    {
       href: "/settings/notifications",
       label: "Public IP notifications",
       icon: "mail" as const,
