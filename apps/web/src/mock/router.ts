@@ -1,8 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { MockState } from "./state";
-import type { ScenarioDeps } from "./scenario";
-import { createTask, getTask, listTasks, getRun, getRuntime, listEvents } from "./state";
-import { startScenario, approveToolCall, denyToolCall, cancelScenario } from "./scenario";
+import type { MockState } from "./state.ts";
+import type { ScenarioDeps } from "./scenario.ts";
+import { createTask, getTask, listTasks, getRun, getRuntime, listEvents } from "./state.ts";
+import { startScenario, approveToolCall, denyToolCall, cancelScenario } from "./scenario.ts";
 import type { TaskSummary } from "$lib/contracts";
 
 export interface MockRouterDeps {

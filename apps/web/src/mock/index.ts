@@ -1,10 +1,10 @@
 import type { Plugin } from "vite";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { IncomingMessage } from "node:http";
-import { createState, listEvents } from "./state";
-import { createClients } from "./clients";
-import type { ScenarioDeps } from "./scenario";
-import { createMockRouter } from "./router";
+import { createState, listEvents } from "./state.ts";
+import { createClients } from "./clients.ts";
+import type { ScenarioDeps } from "./scenario.ts";
+import { createMockRouter } from "./router.ts";
 
 export function mockPlugin(): Plugin {
   return {

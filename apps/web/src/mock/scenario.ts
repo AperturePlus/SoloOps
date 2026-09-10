@@ -1,7 +1,7 @@
 import type { RuntimeSnapshot, FinalReport, ToolCallSummary } from "$lib/contracts";
-import type { MockState, ScenarioHandle } from "./state";
-import { setRunStatus, appendEvent, updateToolCall } from "./state";
-import type { MockClients } from "./clients";
+import type { MockState, ScenarioHandle } from "./state.ts";
+import { setRunStatus, appendEvent, updateToolCall } from "./state.ts";
+import type { MockClients } from "./clients.ts";
 
 export interface ScenarioDeps {
   state: MockState;

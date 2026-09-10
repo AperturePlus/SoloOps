@@ -122,15 +122,29 @@ impl HostExecutor for ScriptedHostExecutor {
     }
 }
 
+/// Tool call ids must be unique across runs: `tool_calls.call_id` is a global
+/// primary key and duplicate ids are silently dropped on insert, which leaves
+/// the run with no pending tools until the budget is exhausted. Derive a
+/// per-run tag from the logical request key ("{run_id}:turn:{n}").
+fn run_tag(request: &ModelRequest) -> &str {
+    request
+        .logical_request_key
+        .split(':')
+        .next()
+        .filter(|tag| !tag.is_empty())
+        .unwrap_or("e2e")
+}
+
 #[async_trait]
 impl ModelProvider for ScriptedProvider {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ProviderError> {
         let managed = request.goal.contains("managed deployment");
+        let tag = run_tag(&request);
         let call = if managed {
             managed_deployment_call(&request)
         } else if request.plan.steps.is_empty() {
             ModelToolCall {
-                call_id: "e2e-plan-start".into(),
+                call_id: format!("{tag}-plan-start"),
                 name: "plan.update".into(),
                 arguments: json!({
                     "summary": "Create one verified workspace artifact",
@@ -144,7 +158,7 @@ impl ModelProvider for ScriptedProvider {
             }
         } else if request.evidence.is_empty() {
             ModelToolCall {
-                call_id: "e2e-workspace-create".into(),
+                call_id: format!("{tag}-workspace-create"),
                 name: "workspace.create".into(),
                 arguments: json!({
                     "path": "e2e-result.txt",
@@ -154,7 +168,7 @@ impl ModelProvider for ScriptedProvider {
             }
         } else if !request.evidence.iter().any(|item| item.kind == "file_snapshot") {
             ModelToolCall {
-                call_id: "e2e-workspace-read".into(),
+                call_id: format!("{tag}-workspace-read"),
                 name: "workspace.read".into(),
                 arguments: json!({
                     "path": "e2e-result.txt",
@@ -169,7 +183,7 @@ impl ModelProvider for ScriptedProvider {
             .any(|step| step.status != PlanStepStatus::Completed)
         {
             ModelToolCall {
-                call_id: "e2e-plan-complete".into(),
+                call_id: format!("{tag}-plan-complete"),
                 name: "plan.update".into(),
                 arguments: json!({
                     "summary": "Created and verified one workspace artifact",
@@ -183,7 +197,7 @@ impl ModelProvider for ScriptedProvider {
             }
         } else {
             ModelToolCall {
-                call_id: "e2e-finish".into(),
+                call_id: format!("{tag}-finish"),
                 name: "run.finish".into(),
                 arguments: json!({
                     "outcome": "succeeded",
@@ -211,9 +225,10 @@ impl ModelProvider for ScriptedProvider {
 }
 
 fn managed_deployment_call(request: &ModelRequest) -> ModelToolCall {
+    let tag = run_tag(request);
     if request.plan.steps.is_empty() {
         return ModelToolCall {
-            call_id: "e2e-deploy-plan-start".into(),
+            call_id: format!("{tag}-deploy-plan-start"),
             name: "plan.update".into(),
             arguments: json!({
                 "summary": "Deploy one approved managed application",
@@ -232,7 +247,7 @@ fn managed_deployment_call(request: &ModelRequest) -> ModelToolCall {
         .any(|item| item.kind == "deployment_proposal")
     {
         return ModelToolCall {
-            call_id: "e2e-managed-plan".into(),
+            call_id: format!("{tag}-managed-plan"),
             name: "managed.deploy.plan".into(),
             arguments: json!({
                 "projectId": "e2e-app",
@@ -247,14 +262,15 @@ fn managed_deployment_call(request: &ModelRequest) -> ModelToolCall {
         .iter()
         .any(|item| item.kind == "managed_deployment")
     {
+        let plan_call_id = format!("{tag}-managed-plan");
         let result = request
             .journal
             .iter()
             .rev()
-            .find(|item| item.kind == "tool_result" && item.payload["callId"] == "e2e-managed-plan")
+            .find(|item| item.kind == "tool_result" && item.payload["callId"] == plan_call_id.as_str())
             .expect("managed deployment proposal result exists");
         return ModelToolCall {
-            call_id: "e2e-managed-apply".into(),
+            call_id: format!("{tag}-managed-apply"),
             name: "managed.deploy.apply".into(),
             arguments: json!({
                 "proposalId": result.payload["result"]["revisionId"],
@@ -269,7 +285,7 @@ fn managed_deployment_call(request: &ModelRequest) -> ModelToolCall {
         .any(|step| step.status != PlanStepStatus::Completed)
     {
         return ModelToolCall {
-            call_id: "e2e-deploy-plan-complete".into(),
+            call_id: format!("{tag}-deploy-plan-complete"),
             name: "plan.update".into(),
             arguments: json!({
                 "summary": "Deployed and verified e2e-app",
@@ -288,7 +304,7 @@ fn managed_deployment_call(request: &ModelRequest) -> ModelToolCall {
         .find(|item| item.kind == "managed_deployment")
         .expect("managed deployment evidence exists");
     ModelToolCall {
-        call_id: "e2e-deploy-finish".into(),
+        call_id: format!("{tag}-deploy-finish"),
         name: "run.finish".into(),
         arguments: json!({
             "outcome": "succeeded",

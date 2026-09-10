@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
-import { createState, createTask, getRuntime, getRun } from "./state";
-import { createClients } from "./clients";
-import { startScenario, approveToolCall, denyToolCall, cancelScenario } from "./scenario";
+import { createState, createTask, getRuntime, getRun } from "./state.ts";
+import { createClients } from "./clients.ts";
+import { startScenario, approveToolCall, denyToolCall, cancelScenario } from "./scenario.ts";
 
 function fakeTimers(): {
   schedule: (fn: () => void, ms: number) => any;
