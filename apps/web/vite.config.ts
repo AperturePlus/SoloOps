@@ -1,7 +1,7 @@
 import { sveltekit } from "@sveltejs/kit/vite";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, loadEnv } from "vite";
-import { mockPlugin } from "./src/mock";
+import { mockPlugin } from "./src/mock/index.ts";
 
 export default defineConfig(({ mode }) => {
   // Vite loads .env.[mode] for `import.meta.env` but does NOT populate

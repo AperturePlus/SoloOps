@@ -6,7 +6,7 @@ import {
   setRunStatus,
   appendEvent,
   listEvents
-} from "./state";
+} from "./state.ts";
 
 test("createTask creates task, run, and runtime snapshot", () => {
   const state = createState();

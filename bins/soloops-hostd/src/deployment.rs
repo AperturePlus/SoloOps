@@ -618,7 +618,7 @@ impl ManagedDeploymentService {
             "composeSha256": compose_sha256,
             "caddySha256": caddy_sha256,
         });
-        let proposal_sha256 = sha256(format!("{}\n{}\n{}", source, compose_sha256, caddy_sha256).as_bytes());
+        let proposal_sha256 = sha256(format!("{source}\n{compose_sha256}\n{caddy_sha256}").as_bytes());
         let bundle = self
             .config
             .managed_root
